@@ -27,6 +27,8 @@ export PATH="${tmp_dir}:${PATH}"
 export SUBSCRIPTION="sub-test"
 export RESOURCE_GROUP="rg-test"
 export VM_NAME="vm-test"
+export TMPDIR="${tmp_dir}/remote-tmp"
+mkdir "$TMPDIR"
 
 success_output="$(scripts/vm-run.sh -c 'echo remote-ok')"
 printf '%s\n' "$success_output" | grep -Fq remote-ok
@@ -65,5 +67,15 @@ self_truncate_output="$(
   scripts/vm-run.sh -c 'echo self-truncate-ok; truncate -s 0 "$0"'
 )"
 printf '%s\n' "$self_truncate_output" | grep -Fq self-truncate-ok
+
+set +e
+scripts/vm-run.sh -c 'kill -TERM "$PPID"; sleep 1' >"$failure_output" 2>&1
+status=$?
+set -e
+[ "$status" != 0 ]
+if find "$TMPDIR" -type f -print -quit | grep -q .; then
+  echo "vm-run left a temporary file after an interrupted guest script" >&2
+  exit 1
+fi
 
 echo "vm-run tests: PASS"
