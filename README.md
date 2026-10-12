@@ -1,6 +1,18 @@
-# Deploy Qwen3.8-27B on Azure H100 Spot VMs
+# Run fast AI pilots on Azure Spot H100 GPUs
 
-This repository contains an end-to-end Azure demo for serving Qwen3.8-27B on one or two H100 GPUs. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
+Azure Spot Virtual Machines make unused Azure GPU capacity available at a lower price in exchange for interruptible availability. That trade-off is a strong fit for quick pilots, proofs of concept (PoCs), benchmarks, evaluations, and demos that need powerful GPUs for a limited time but do not require production uptime.
+
+This repository turns that low-priority GPU approach into an end-to-end Azure deployment for serving Qwen3.8-27B on one or two H100 GPUs. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
+
+## Why use Spot GPUs for pilots and PoCs?
+
+- **Start with production-class accelerators**: test model quality, latency, throughput, and concurrency on one or two H100 GPUs without first committing to always-on capacity.
+- **Move quickly from idea to endpoint**: use the included scripts to find candidate regions, provision the VM, deploy the model stack, and run smoke tests and benchmarks.
+- **Measure before scaling**: capture application, model, GPU, host, and cost telemetry so a pilot can produce evidence for architecture and capacity decisions.
+- **Pay for experiments, not idle time**: stop or deallocate the VM between sessions and keep the downloaded model on a persistent data disk.
+- **Plan for interruption**: Spot VMs can be evicted at any time and capacity is not guaranteed. Use regular Azure capacity for production workloads that require predictable availability.
+
+The complete deployment is in [`2610-h100-qwen-38-27b/`](2610-h100-qwen-38-27b/), with the step-by-step runbook in its [`README.md`](2610-h100-qwen-38-27b/README.md).
 
 ## Fork information
 
