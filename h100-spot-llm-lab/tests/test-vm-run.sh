@@ -61,4 +61,9 @@ set -e
 }
 grep -Fq file-script-fail "$failure_output"
 
+self_truncate_output="$(
+  scripts/vm-run.sh -c 'echo self-truncate-ok; truncate -s 0 "$0"'
+)"
+printf '%s\n' "$self_truncate_output" | grep -Fq self-truncate-ok
+
 echo "vm-run tests: PASS"
