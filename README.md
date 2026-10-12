@@ -16,7 +16,7 @@ The complete deployment is in [`2610-h100-qwen-38-27b/`](2610-h100-qwen-38-27b/)
 
 ## Fork information
 
-This repository is a personal fork of [`1w2w3y/wuyi-labs`](https://github.com/1w2w3y/wuyi-labs). The upstream repository contains experiments, code samples, demos, and resources for artificial intelligence, cloud computing, and software engineering.
+This repository is a personal fork of [`1w2w3y/wuyi-labs`](https://github.com/1w2w3y/wuyi-labs). 
 
 This fork focuses on a reusable H100 deployment with Azure-native monitoring.
 
