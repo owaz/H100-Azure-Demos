@@ -225,9 +225,12 @@ RESOURCE_GROUP=rg-llm-h100-lab LOCATION=southeastasia ATTACH_VMS=0 infra/provisi
 
 Resource names can be overridden with `LAW_NAME`, `AMW_NAME`,
 `APP_INSIGHTS_NAME`, `DCE_NAME` and `DCR_NAME`. All resources must be in the
-same resource group and region. The script registers required Azure resource
-providers when the caller has permission. Deleting `RESOURCE_GROUP` removes
-monitoring together with the VM, network, disks, and managed identity.
+same resource group as the lab. Default compute-network and monitoring names
+include the Azure region, so the same group can safely contain a replacement
+VM in another region or resources left by a partially completed attempt. The
+script registers required Azure resource providers when the caller has
+permission. Deleting `RESOURCE_GROUP` removes monitoring together with the VM,
+network, disks, and managed identity.
 
 The lower-level [`infra/telemetry-identities.sh`](infra/telemetry-identities.sh)
 remains available for adding identities in more regions to an existing DCR,

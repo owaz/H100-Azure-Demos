@@ -74,6 +74,7 @@ export SUBSCRIPTION RESOURCE_GROUP
 reuse_existing=0
 find_rc=1
 if [ "$(az group exists --subscription "$SUBSCRIPTION" -n "$RESOURCE_GROUP" -o tsv)" = true ]; then
+  find_rc=0
   find_stack_vm || find_rc=$?
 fi
 case "$find_rc" in

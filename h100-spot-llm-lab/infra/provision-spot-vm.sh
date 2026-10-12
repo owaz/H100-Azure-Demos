@@ -48,11 +48,6 @@ OS_DISK_GB="${OS_DISK_GB:-128}"
 DATA_DISK_GB="${DATA_DISK_GB:-512}"
 VNET_CIDR="${VNET_CIDR:-10.60.0.0/16}"
 SUBNET_CIDR="${SUBNET_CIDR:-10.60.1.0/24}"
-VNET="vnet-${PREFIX}"
-SUBNET="snet-${PREFIX}"
-NSG="nsg-${PREFIX}"
-NAT="nat-${PREFIX}"
-NAT_PIP="pip-nat-${PREFIX}"
 
 # shellcheck source=../scripts/lib/find-vm.sh
 . "$(dirname "$0")/../scripts/lib/find-vm.sh"
@@ -164,6 +159,12 @@ region_short() {
   esac
 }
 VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}}"
+INFRA_SUFFIX="${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}"
+VNET="${VNET:-vnet-${INFRA_SUFFIX}}"
+SUBNET="${SUBNET:-snet-${INFRA_SUFFIX}}"
+NSG="${NSG:-nsg-${INFRA_SUFFIX}}"
+NAT="${NAT:-nat-${INFRA_SUFFIX}}"
+NAT_PIP="${NAT_PIP:-pip-nat-${INFRA_SUFFIX}}"
 
 if [ "$REUSE" != 1 ] && ! az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none 2>/dev/null; then
   select_vm_size

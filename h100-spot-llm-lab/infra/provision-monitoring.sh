@@ -22,12 +22,6 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"
 LOCATION="${LOCATION:-}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-}"
-LAW_NAME="${LAW_NAME:-law-llm-telemetry}"
-AMW_NAME="${AMW_NAME:-amw-llm-telemetry}"
-APP_INSIGHTS_NAME="${APP_INSIGHTS_NAME:-appi-llm-telemetry}"
-DCE_NAME="${DCE_NAME:-dce-llm-telemetry}"
-DCR_NAME="${DCR_NAME:-dcr-llm-telemetry}"
-DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-deploy-llm-monitoring}"
 WRITE_ENV="${WRITE_ENV:-1}"
 ATTACH_VMS="${ATTACH_VMS:-1}"
 ENV_FILE="${ENV_FILE:-${ROOT}/.env}"
@@ -80,6 +74,14 @@ if [ -z "$LOCATION" ]; then
       ;;
   esac
 fi
+
+LOCATION_KEY="$(printf '%s' "$LOCATION" | tr '[:upper:]' '[:lower:]')"
+LAW_NAME="${LAW_NAME:-law-llm-telemetry-${LOCATION_KEY}}"
+AMW_NAME="${AMW_NAME:-amw-llm-telemetry-${LOCATION_KEY}}"
+APP_INSIGHTS_NAME="${APP_INSIGHTS_NAME:-appi-llm-telemetry-${LOCATION_KEY}}"
+DCE_NAME="${DCE_NAME:-dce-llm-telemetry-${LOCATION_KEY}}"
+DCR_NAME="${DCR_NAME:-dcr-llm-telemetry-${LOCATION_KEY}}"
+DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-deploy-llm-monitoring-${LOCATION_KEY}}"
 
 echo "==> Subscription ${SUBSCRIPTION}"
 echo "==> Resource group ${RESOURCE_GROUP} (${LOCATION})"
