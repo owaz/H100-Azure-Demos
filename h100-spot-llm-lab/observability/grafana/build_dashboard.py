@@ -129,7 +129,7 @@ NOW = "2m"
 IN_C = 'vllm:prompt_tokens_by_source_total{source="local_compute"}'
 IN_H = 'vllm:prompt_tokens_by_source_total{source="local_cache_hit"}'
 OUT = 'vllm:generation_tokens_total'
-MAX_SEQS = 32  # vLLM --max-num-seqs (QWEN38_27B_MAX_NUM_SEQS in .env)
+MAX_SEQS = 32  # Dashboard reference line; model profiles can use another limit.
 
 # ---------------------------------------------------------------- Overview
 row("Overview")

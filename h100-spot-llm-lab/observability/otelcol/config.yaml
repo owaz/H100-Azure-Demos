@@ -37,7 +37,7 @@ receivers:
       scrape_configs:
         - job_name: vllm
           static_configs:
-            - targets: ["qwen3.8-27b:8080"]
+            - targets: ["model:8080"]
               labels: {service: local-llm}
         - job_name: litellm
           metrics_path: /metrics/

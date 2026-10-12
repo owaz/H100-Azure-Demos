@@ -16,16 +16,18 @@ cd /opt/llm-self-hosting || exit 1
 CONCURRENCY="${CONCURRENCY:-1 4 16 32}"
 IN="${IN:-2000}"
 OUT="${OUT:-512}"
-CTR=qwen3.8-27b
-MODEL_DIR="$(grep -E '^MODEL_DIR=' .env | tail -1 | cut -d= -f2)"
-MODEL_DIR="${MODEL_DIR:-Qwen3.8-27B-FP8}"
+CTR=llm-model
+MODEL_ID="$(sed -n 's/^MODEL_ID=//p' .env | tail -n 1)"
+VM_SIZE="$(sed -n 's/^MODEL_VM_SIZE=//p' .env | tail -n 1)"
+PROFILE="$(python3 scripts/model_profile.py resolve "$MODEL_ID" "$VM_SIZE")" || exit 1
+MODEL_DIR="$(printf '%s' "$PROFILE" | jq -r '.model.model_dir')"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RES="/opt/llm-self-hosting/results/bench-${STAMP}"
 mkdir -p "$RES"
 
 [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8096/health)" = 200 ] \
   || { echo "vLLM is not healthy"; exit 1; }
-echo "model=${MODEL_DIR} in=${IN} out=${OUT} results=${RES}"
+echo "model=${MODEL_ID} in=${IN} out=${OUT} results=${RES}"
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 docker logs "$CTR" 2>&1 | grep -E -o 'GPU KV cache size: [0-9,]+ tokens|Model loading took [0-9.]+ GiB' | sort -u
 
@@ -34,7 +36,7 @@ bench() {
   local name="$1" c="$2" n="$3"; shift 3
   docker exec "$CTR" vllm bench serve \
     --base-url http://127.0.0.1:8080 --endpoint /v1/completions \
-    --model qwen3.8-27b --tokenizer "/models/${MODEL_DIR}" \
+    --model "$MODEL_ID" --tokenizer "/models/${MODEL_DIR}" \
     --max-concurrency "$c" --num-prompts "$n" --seed 0 --ignore-eos \
     --percentile-metrics ttft,itl --metric-percentiles 50,99 \
     --save-result --result-dir /tmp/bench --result-filename "${name}.json" \

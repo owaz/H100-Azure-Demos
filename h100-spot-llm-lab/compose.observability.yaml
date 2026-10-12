@@ -18,7 +18,7 @@ services:
       AZMON_METRICS_ENDPOINT: "${AZMON_METRICS_ENDPOINT:?set AZMON_METRICS_ENDPOINT in .env}"
       DEPLOYMENT_ENVIRONMENT: "${DEPLOYMENT_ENVIRONMENT:-azure-h100}"
       # Stamped as upstream_model on every metric, log and span (otelcol config).
-      LLM_MODEL: "${LLM_MODEL:-qwen3.8-27b}"
+      LLM_MODEL: "${MODEL_ID:-qwen3.8-27b-fp8}"
     volumes:
       - ./observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro
       - /data/otelcol:/var/lib/otelcol

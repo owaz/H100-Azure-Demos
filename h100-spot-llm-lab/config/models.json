@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "qwen3.8-27b-fp8",
+      "display_name": "Qwen3.8 27B FP8",
+      "description": "General-purpose reasoning and tool-use model; the lab's proven NC40 baseline.",
+      "repo": "Qwen/Qwen3.8-27B-FP8",
+      "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+      "model_dir": "Qwen3.8-27B-FP8",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 30.9,
+      "download_patterns": ["*"],
+      "capabilities": {
+        "reasoning": true,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "validated",
+          "tensor_parallel_size": 1,
+          "max_model_len": 262144,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 32,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--trust-remote-code",
+            "--spec-method", "mtp",
+            "--spec-tokens", "3",
+            "--limit-mm-per-prompt", "{\"image\":{\"count\":4,\"width\":1024,\"height\":1024},\"video\":0}",
+            "--reasoning-parser", "qwen3",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "qwen3_coder"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 262144,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 64,
+          "max_num_batched_tokens": 32768,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--trust-remote-code",
+            "--spec-method", "mtp",
+            "--spec-tokens", "3",
+            "--limit-mm-per-prompt", "{\"image\":{\"count\":4,\"width\":1024,\"height\":1024},\"video\":0}",
+            "--reasoning-parser", "qwen3",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "qwen3_coder"
+          ]
+        }
+      }
+    },
+    {
+      "id": "gpt-oss-20b",
+      "display_name": "OpenAI gpt-oss-20b",
+      "description": "Low-latency MXFP4 reasoning and agent model.",
+      "repo": "openai/gpt-oss-20b",
+      "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+      "model_dir": "gpt-oss-20b",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 13.8,
+      "download_patterns": [
+        "*.json",
+        "*.jinja",
+        "*.txt",
+        "LICENSE",
+        "model-*.safetensors"
+      ],
+      "capabilities": {
+        "reasoning": true,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 1,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.9,
+          "max_num_seqs": 64,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "auto",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "openai"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.9,
+          "max_num_seqs": 128,
+          "max_num_batched_tokens": 32768,
+          "kv_cache_dtype": "auto",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "openai"
+          ]
+        }
+      }
+    },
+    {
+      "id": "gpt-oss-120b",
+      "display_name": "OpenAI gpt-oss-120b",
+      "description": "117B-parameter, 5.1B-active MXFP4 reasoning model documented to fit one 80 GB H100.",
+      "repo": "openai/gpt-oss-120b",
+      "revision": "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
+      "model_dir": "gpt-oss-120b",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 63.1,
+      "download_patterns": [
+        "*.json",
+        "*.jinja",
+        "*.txt",
+        "LICENSE",
+        "model-*.safetensors"
+      ],
+      "capabilities": {
+        "reasoning": true,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 1,
+          "max_model_len": 32768,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 16,
+          "max_num_batched_tokens": 8192,
+          "kv_cache_dtype": "auto",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "openai"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 32,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "auto",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "openai"
+          ]
+        }
+      }
+    },
+    {
+      "id": "qwen3-32b-fp8",
+      "display_name": "Qwen3 32B FP8",
+      "description": "Dense multilingual reasoning model with native 32K context.",
+      "repo": "Qwen/Qwen3-32B-FP8",
+      "revision": "aa55da1ecc13d006e8b8e4f54579b1ea8c3db2df",
+      "model_dir": "Qwen3-32B-FP8",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 34.3,
+      "download_patterns": ["*"],
+      "capabilities": {
+        "reasoning": true,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 1,
+          "max_model_len": 32768,
+          "gpu_memory_utilization": 0.92,
+          "max_num_seqs": 32,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--reasoning-parser", "qwen3",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.92,
+          "max_num_seqs": 64,
+          "max_num_batched_tokens": 32768,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--reasoning-parser", "qwen3",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        }
+      }
+    },
+    {
+      "id": "qwen3-30b-a3b-instruct-2507",
+      "display_name": "Qwen3 30B-A3B Instruct 2507",
+      "description": "Efficient 3.3B-active MoE model for general, multilingual, and tool workloads.",
+      "repo": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "revision": "0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe",
+      "model_dir": "Qwen3-30B-A3B-Instruct-2507",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 61.1,
+      "download_patterns": ["*"],
+      "capabilities": {
+        "reasoning": false,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 1,
+          "max_model_len": 32768,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 24,
+          "max_num_batched_tokens": 8192,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.93,
+          "max_num_seqs": 48,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        }
+      }
+    },
+    {
+      "id": "mistral-small-3.1-24b",
+      "display_name": "Mistral Small 3.1 24B",
+      "description": "Multilingual dense model; official card reports about 55 GB GPU memory in BF16/FP16.",
+      "repo": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+      "revision": "68faf511d618ef198fef186659617cfd2eb8e33a",
+      "model_dir": "Mistral-Small-3.1-24B-Instruct-2503",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 48.1,
+      "download_patterns": [
+        "*.json",
+        "*.txt",
+        "*.model",
+        "*.tiktoken",
+        "*.py",
+        "model-*.safetensors"
+      ],
+      "capabilities": {
+        "reasoning": false,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC40ads_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 1,
+          "max_model_len": 32768,
+          "gpu_memory_utilization": 0.92,
+          "max_num_seqs": 24,
+          "max_num_batched_tokens": 8192,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--tokenizer-mode", "mistral",
+            "--config-format", "mistral",
+            "--load-format", "mistral",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "mistral"
+          ]
+        },
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 131072,
+          "gpu_memory_utilization": 0.92,
+          "max_num_seqs": 48,
+          "max_num_batched_tokens": 16384,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--tokenizer-mode", "mistral",
+            "--config-format", "mistral",
+            "--load-format", "mistral",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "mistral"
+          ]
+        }
+      }
+    },
+    {
+      "id": "qwen2.5-72b-instruct",
+      "display_name": "Qwen2.5 72B Instruct",
+      "description": "Mature dense 72B multilingual model; NC80-only in BF16.",
+      "repo": "Qwen/Qwen2.5-72B-Instruct",
+      "revision": "495f39366efef23836d0cfae4fbe635880d2be31",
+      "model_dir": "Qwen2.5-72B-Instruct",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 145.4,
+      "download_patterns": ["*"],
+      "capabilities": {
+        "reasoning": false,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 16384,
+          "gpu_memory_utilization": 0.94,
+          "max_num_seqs": 16,
+          "max_num_batched_tokens": 8192,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        }
+      }
+    },
+    {
+      "id": "qwen3-next-80b-a3b-instruct",
+      "display_name": "Qwen3-Next 80B-A3B Instruct",
+      "description": "Efficient 3B-active MoE model with hybrid attention; NC80-only in BF16.",
+      "repo": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "revision": "9c7f2fbe84465e40164a94cc16cd30b6999b0cc7",
+      "model_dir": "Qwen3-Next-80B-A3B-Instruct",
+      "license": "Apache-2.0",
+      "access": "ungated",
+      "download_size_gb": 162.7,
+      "download_patterns": ["*"],
+      "capabilities": {
+        "reasoning": false,
+        "tools": true
+      },
+      "smoke": {
+        "chat_template_kwargs": {}
+      },
+      "vm_profiles": {
+        "Standard_NC80adis_H100_v5": {
+          "status": "candidate",
+          "tensor_parallel_size": 2,
+          "max_model_len": 16384,
+          "gpu_memory_utilization": 0.95,
+          "max_num_seqs": 12,
+          "max_num_batched_tokens": 8192,
+          "kv_cache_dtype": "fp8",
+          "vllm_args": [
+            "--trust-remote-code",
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes"
+          ]
+        }
+      }
+    }
+  ]
+}

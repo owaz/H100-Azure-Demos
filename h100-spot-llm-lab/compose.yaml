@@ -13,32 +13,30 @@ x-logging: &logging
     labels-regex: '^(observability\.|com\.docker\.compose\.service$)'
 
 services:
-  # One-shot job: fetch the pinned checkpoint into /data/models. Uses the vLLM
-  # image's bundled `hf` CLI, so no extra image is needed. Re-runs only verify
-  # the local copy.
+  # One-shot job: resolve and fetch the catalog-pinned checkpoint. The vLLM
+  # image includes Python and the hf CLI.
   model-download:
     image: nvcr.io/nvidia/vllm:26.07-py3@sha256:95c498a475142c20c989c65e5d223348c09fed83ba17ddf44f117610c0bd3268
     container_name: llm-model-download
     environment:
       HF_TOKEN: "${HF_TOKEN:-}"
       HF_XET_HIGH_PERFORMANCE: "1"
-    command:
-      - bash
-      - -c
-      - >-
-        hf download "${MODEL_REPO:-Qwen/Qwen3.8-27B-FP8}"
-        --revision "${MODEL_REVISION:-017b9c7af6b5689d5dd426a76e0bc077eb5ca20a}"
-        --local-dir "/models/${MODEL_DIR:-Qwen3.8-27B-FP8}"
+      MODEL_ID: "${MODEL_ID:-qwen3.8-27b-fp8}"
+      MODEL_CATALOG: /app/config/models.json
+    command: ["python3", "/app/scripts/download_model.py"]
     volumes:
       - /data/models:/models
+      - ./config/models.json:/app/config/models.json:ro
+      - ./scripts/model_profile.py:/app/scripts/model_profile.py:ro
+      - ./scripts/download_model.py:/app/scripts/download_model.py:ro
     logging: *logging
     restart: "no"
 
-  qwen3.8-27b:
+  model:
     image: local/vllm:26.07-xgrammar0.2.3
     build:
       context: images/vllm
-    container_name: qwen3.8-27b
+    container_name: llm-model
     depends_on:
       model-download:
         condition: service_completed_successfully
@@ -50,55 +48,20 @@ services:
     environment:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      MODEL_ID: "${MODEL_ID:-qwen3.8-27b-fp8}"
+      MODEL_VM_SIZE: "${MODEL_VM_SIZE:?deploy with scripts/deploy.sh to set MODEL_VM_SIZE}"
+      MODEL_CATALOG: /app/config/models.json
     volumes:
       - /data/models:/models:ro
       - /data/vllm-cache:/root/.cache/vllm
-    command:
-      - python3
-      - -m
-      - vllm.entrypoints.openai.api_server
-      # Official FP8 checkpoint (E4M3, 128x128 block scales, dynamic
-      # activations); vLLM reads its quantization_config, so no --quantization
-      # flag. Embeddings, lm_head, linear-attention gates and the vision tower
-      # stay BF16. H100 runs FP8 natively; it has no FP4 tensor cores.
-      - --model
-      - /models/${MODEL_DIR:-Qwen3.8-27B-FP8}
-      - --served-model-name
-      - qwen3.8-27b
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - --trust-remote-code
-      # Native 262K window; the 94-GB H100 NVL has room for it.
-      - --max-model-len
-      - "${QWEN38_27B_CONTEXT_SIZE:-262144}"
-      - --gpu-memory-utilization
-      - "${QWEN38_27B_GPU_MEMORY_UTILIZATION:-0.93}"
-      - --tensor-parallel-size
-      - "${QWEN38_27B_TENSOR_PARALLEL_SIZE:-1}"
-      - --max-num-seqs
-      - "${QWEN38_27B_MAX_NUM_SEQS:-32}"
-      - --max-num-batched-tokens
-      - "${QWEN38_27B_MAX_NUM_BATCHED_TOKENS:-16384}"
-      - --kv-cache-dtype
-      - fp8
-      - --enable-prefix-caching
-      - --spec-method
-      - mtp
-      - --spec-tokens
-      - "${QWEN38_27B_SPEC_TOKENS:-3}"
-      - --limit-mm-per-prompt
-      - '{"image":{"count":4,"width":1024,"height":1024},"video":0}'
-      - --reasoning-parser
-      - qwen3
-      - --enable-auto-tool-choice
-      - --tool-call-parser
-      - qwen3_coder
+      - ./config/models.json:/app/config/models.json:ro
+      - ./scripts/model_profile.py:/app/scripts/model_profile.py:ro
+      - ./scripts/serve_model.py:/app/scripts/serve_model.py:ro
+    command: ["python3", "/app/scripts/serve_model.py"]
     labels:
       observability.logs: "true"
       observability.service: "local-llm"
-      observability.model: "${LLM_MODEL:-qwen3.8-27b}"
+      observability.model: "${MODEL_ID:-qwen3.8-27b-fp8}"
     ports:
       - "127.0.0.1:8096:8080"
     healthcheck:
@@ -116,15 +79,15 @@ services:
     image: ghcr.io/berriai/litellm:v1.103.2@sha256:f63fb81b831b170ec16851e23c36ac5bf52ef106b271406429524a2ed730bbfd
     container_name: llm-litellm
     depends_on:
-      qwen3.8-27b:
+      model:
         condition: service_healthy
     command:
       - --config=/app/config.yaml
       - --log_config=/app/uvicorn_logging.json
     environment:
-      LITELLM_UPSTREAM_MODEL: openai/qwen3.8-27b
-      LITELLM_UPSTREAM_API_BASE: http://qwen3.8-27b:8080/v1
-      LITELLM_ACTIVE_MODEL: qwen3.8-27b
+      LITELLM_UPSTREAM_MODEL: "openai/${MODEL_ID:-qwen3.8-27b-fp8}"
+      LITELLM_UPSTREAM_API_BASE: http://model:8080/v1
+      LITELLM_ACTIVE_MODEL: "${MODEL_ID:-qwen3.8-27b-fp8}"
       OTEL_EXPORTER: "${LITELLM_OTEL_EXPORTER:-otlp_http}"
       OTEL_ENDPOINT: "${LITELLM_OTEL_ENDPOINT:-http://otel-collector:4318/v1/traces}"
       OTEL_SERVICE_NAME: azure-litellm
@@ -134,7 +97,7 @@ services:
     labels:
       observability.logs: "true"
       observability.service: "litellm-gateway"
-      observability.model: "${LLM_MODEL:-qwen3.8-27b}"
+      observability.model: "${MODEL_ID:-qwen3.8-27b-fp8}"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
       - ./litellm/request_log_callback.py:/app/request_log_callback.py:ro
