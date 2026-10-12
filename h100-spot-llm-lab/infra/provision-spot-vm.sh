@@ -15,9 +15,9 @@
 # Reuse first: the script looks for an existing stack VM (tags
 # project=llm-self-hosting role=llm-h100) in the subscription. If one exists,
 # it reuses it (starting it if deallocated) and creates nothing. Only if none
-# exists does it create a new VM in RESOURCE_GROUP, named with the region,
-# placement and today's date, e.g. vm-llm-h100-uks-z2-261005 for uksouth zone 2
-# on 2026-10-05. The VM name uses a short region code (region_short below).
+# exists does it create a new VM in RESOURCE_GROUP, named with the region and
+# first available sequence, e.g. vm-h100-uks-01 for uksouth. The VM name uses
+# a short region code (region_short below).
 # Pick the region and optional zone with infra/spot-regions.sh.
 #
 #   RESOURCE_GROUP=rg-llm-lab LOCATION=southeastasia ZONE=2 infra/provision-spot-vm.sh
@@ -158,7 +158,37 @@ region_short() {
     *) echo "$1" ;;
   esac
 }
-VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}}"
+if [ -z "${VM_NAME:-}" ]; then
+  existing_vm_names=""
+  if ! resource_group_exists="$(az group exists -n "$RESOURCE_GROUP" -o tsv)"; then
+    echo "==> Aborting: unable to check resource group ${RESOURCE_GROUP}" >&2
+    exit 1
+  fi
+  if [ "$resource_group_exists" = true ]; then
+    if ! existing_vm_names="$(az vm list -g "$RESOURCE_GROUP" --query '[].name' -o tsv)"; then
+      echo "==> Aborting: unable to list existing VMs in ${RESOURCE_GROUP}" >&2
+      exit 1
+    fi
+    existing_vm_names="${existing_vm_names//$'\r'/}"
+  fi
+  vm_sequence=1
+  while :; do
+    printf -v vm_sequence_suffix '%02d' "$vm_sequence"
+    candidate_vm_name="vm-h100-$(region_short "$LOCATION")-${vm_sequence_suffix}"
+    candidate_exists=0
+    while IFS= read -r existing_vm_name; do
+      if [ "$existing_vm_name" = "$candidate_vm_name" ]; then
+        candidate_exists=1
+        break
+      fi
+    done <<< "$existing_vm_names"
+    if [ "$candidate_exists" = 0 ]; then
+      VM_NAME="$candidate_vm_name"
+      break
+    fi
+    vm_sequence=$((vm_sequence + 1))
+  done
+fi
 INFRA_SUFFIX="${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}"
 VNET="${VNET:-vnet-${INFRA_SUFFIX}}"
 SUBNET="${SUBNET:-snet-${INFRA_SUFFIX}}"
@@ -190,7 +220,7 @@ if [ "$REUSE" = 1 ]; then
     az vm start -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none
   fi
 else
-# No existing stack VM: create the shared resource group and a dated VM.
+# No existing stack VM: create the shared resource group and a numbered VM.
 
 echo "==> Resource group ${RESOURCE_GROUP} (${LOCATION})"
 az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags "${TAGS[@]}" -o none

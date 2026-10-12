@@ -157,6 +157,11 @@ The monitoring script finds tagged stack VMs in that group and region and
 attaches the identity. It is safe to rerun: existing resources, role
 assignments and identity attachments are reused.
 
+New VMs are named `vm-h100-<region>-<sequence>`, using the deployment region's
+short code, such as `vm-h100-sea-01` for Southeast Asia. If that name already
+exists in the resource group, the provisioner selects the first available
+sequence (`02`, `03`, and so on). Set `VM_NAME` to override the generated name.
+
 Provisioning defaults to regional placement without an availability-zone
 constraint. To require a specific zone, set `ZONE=1`, `ZONE=2`, or `ZONE=3`.
 If Azure returns `OverconstrainedZonalAllocationRequest`, retry with regional
