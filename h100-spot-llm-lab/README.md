@@ -56,22 +56,57 @@ The recommended path is the end-to-end launcher:
 
 ```bash
 cp .env.example .env
-# when using ngrok, edit config/ngrok-traffic-policy.yaml with the allowed client IPs
-
-infra/spot-regions.sh southeastasia uksouth germanywestcentral   # NC40 eviction, price, placement
-SKU=Standard_NC80adis_H100_v5 infra/spot-regions.sh southeastasia uksouth  # same checks for NC80
 
 scripts/launch.sh
 ```
 
-The launcher chooses NC40 or NC80, lists only compatible models, explicitly
-handles reuse of an existing VM with a different size, and confirms candidate
-profiles before creating resources. Monitoring and ngrok are separate prompts
-and default to off. It then provisions or reuses the VM, bootstraps the host,
-deploys the selected model, waits for health, and runs the capability-aware
-smoke test.
+The launcher asks for the VM size and then the Azure region, lists only
+compatible models when model deployment is selected, explicitly handles reuse
+of an existing VM with a different size, and confirms candidate profiles before
+creating resources. Model deployment defaults to yes. Choosing no provisions or
+reuses the VM, installs the GPU driver and Docker stack, and syncs the
+vLLM/LiteLLM application files without selecting, downloading, or starting a
+model. Any existing stack containers are stopped, while checkpoints already
+cached on the data disk are preserved. Monitoring and ngrok are separate prompts
+for model deployments and default to off. If any deployment step fails, the
+launcher offers to delete the complete resource group; deletion defaults to no
+and removes every resource in that group when confirmed.
 
-For automation or step-by-step control, the original scripts remain available:
+### Optional: configure ngrok
+
+Complete these steps before answering **Yes** to the launcher's ngrok prompt:
+
+1. Create or sign in to an [ngrok account](https://dashboard.ngrok.com/).
+2. When ngrok asks you to choose a product, select **Gateway**, not
+   **AI Gateway**.
+
+   ![Select the ngrok Gateway product](docs/images/ngrok-select-gateway.png)
+
+3. In the Gateway dashboard, open **Your Authtoken**, copy the token, and set
+   it as `NGROK_AUTHTOKEN` in `.env`. Keep this value secret.
+
+   ![Copy the masked ngrok authtoken](docs/images/ngrok-authtoken.png)
+
+4. Open **Domains**. Use the assigned development domain or select
+   **New Domain**, then set its full HTTPS URL as `NGROK_URL` in `.env`.
+
+   ![Copy the ngrok domain](docs/images/ngrok-domain.png)
+
+   ```dotenv
+   NGROK_AUTHTOKEN=<your-authtoken>
+   NGROK_URL=https://your-domain.ngrok-free.dev
+   ```
+
+5. Replace the example addresses in `config/ngrok-traffic-policy.yaml` with
+   the public IP addresses that may access the endpoint. The LiteLLM gateway
+   does not provide its own authentication, so do not expose it without this
+   allow-list.
+6. Run `scripts/launch.sh` and answer **Yes** when asked whether to enable the
+   ngrok public tunnel.
+
+## Step-by-step control
+
+For automation or manual control, use the original scripts:
 
 ```bash
 cp .env.example .env

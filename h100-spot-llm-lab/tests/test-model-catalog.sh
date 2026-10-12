@@ -59,7 +59,8 @@ MODEL_COMMAND_ONLY=1 \
   ' >/dev/null
 
 tmp_catalog="$(mktemp)"
-trap 'rm -f "$tmp_catalog"' EXIT
+tmp_dir="$(mktemp -d)"
+trap 'rm -f "$tmp_catalog"; rm -rf "$tmp_dir"' EXIT
 jq '.models += [.models[0]]' config/models.json > "$tmp_catalog"
 if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null 2>&1; then
   echo "duplicate model id unexpectedly validated" >&2
@@ -108,6 +109,50 @@ if printf '' | scripts/launch.sh >/dev/null 2>&1; then
   echo "interactive launcher unexpectedly accepted noninteractive stdin" >&2
   exit 1
 fi
+
+no_model_up_output="$(mktemp)"
+if DEPLOY_MODEL=0 scripts/deploy.sh up >"$no_model_up_output" 2>&1; then
+  echo "deploy unexpectedly started services without a model" >&2
+  rm -f "$no_model_up_output"
+  exit 1
+fi
+grep -Fq "model services cannot start without a model" "$no_model_up_output"
+rm -f "$no_model_up_output"
+
+cat > "${tmp_dir}/az" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1 $2" = "vm show" ]; then
+  printf '%s\n' Standard_NC40ads_H100_v5
+elif [ "$1 $2 $3" = "vm run-command invoke" ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--scripts" ]; then
+      cp "${2#@}" "$CAPTURED_REMOTE_SCRIPT"
+      break
+    fi
+    shift
+  done
+  printf '%s\n' '__VM_RUN_EXIT_CODE__=0'
+else
+  printf 'unexpected az call: %s\n' "$*" >&2
+  exit 1
+fi
+EOF
+chmod +x "${tmp_dir}/az"
+
+PATH="${tmp_dir}:${PATH}" \
+CAPTURED_REMOTE_SCRIPT="${tmp_dir}/remote-script" \
+SUBSCRIPTION=sub-test \
+RESOURCE_GROUP=rg-test \
+VM_NAME=vm-test \
+DEPLOY_MODEL=0 \
+  scripts/deploy.sh sync >"${tmp_dir}/no-model-sync-output"
+grep -Fq "Model: none (sync only)" "${tmp_dir}/no-model-sync-output"
+grep -Fq "sed -i -e '/^MODEL_ID=/d' -e '/^MODEL_VM_SIZE=/d' .env" \
+  "${tmp_dir}/remote-script"
+grep -Fq "docker rm -f llm-model-download llm-model llm-litellm llm-ngrok" \
+  "${tmp_dir}/remote-script"
+grep -Fq "model services stopped; stack files are synced without a selected model" \
+  "${tmp_dir}/remote-script"
 
 bash tests/test-resource-group.sh
 
