@@ -18,6 +18,9 @@
 # keep their VM values. The secrets pass through the run-command script; the VM-side
 # copy of that script is truncated after use.
 #
+# MODEL_ID selects a checked-in config/models.json entry. The actual VM size
+# must have a matching profile or deployment stops before syncing.
+#
 # TELEMETRY_UAMI_CLIENT_ID is looked up from the ingestion identity attached to
 # the VM (id-llm-ingest-<region>, attached by infra/provision-spot-vm.sh) and
 # overrides any local value: the identities are region-locked, so only the
@@ -25,9 +28,6 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/.."
-# shellcheck source=lib/vm-size.sh
-. scripts/lib/vm-size.sh
-
 ACTION="${1:-sync}"
 case "$ACTION" in sync|up) ;; *) echo "usage: deploy.sh [sync|up]" >&2; exit 2 ;; esac
 REMOTE_DIR="/opt/llm-self-hosting"
@@ -37,33 +37,63 @@ PAYLOAD="$(git ls-files -z --cached --others --exclude-standard \
   | tar --null -T - -czf - | base64 -w0)"
 echo "payload: $(( ${#PAYLOAD} / 1024 )) KiB (base64)"
 
-# Resolve the VM once here; scripts/vm-run.sh uses RG + VM_NAME when both are set.
+# Resolve the VM once here; scripts/vm-run.sh uses RESOURCE_GROUP + VM_NAME.
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"   # default: the az CLI's current subscription
-if [ -z "${RG:-}" ] || [ -z "${VM_NAME:-}" ]; then
+: "${RESOURCE_GROUP:?set RESOURCE_GROUP to the lab resource group}"
+if [ -z "${VM_NAME:-}" ]; then
   # shellcheck source=lib/find-vm.sh
   . scripts/lib/find-vm.sh
   rc=0; find_stack_vm || rc=$?
-  if [ "$rc" = 1 ]; then echo "no stack VM found in subscription ${SUBSCRIPTION}; run infra/provision-spot-vm.sh" >&2; exit 1; fi
+  if [ "$rc" = 1 ]; then echo "no stack VM found in resource group ${RESOURCE_GROUP}; run infra/provision-spot-vm.sh" >&2; exit 1; fi
   [ "$rc" = 0 ] || exit 1
-  RG="$FOUND_RG"; VM_NAME="$FOUND_VM"
+  VM_NAME="$FOUND_VM"
 fi
-export SUBSCRIPTION RG VM_NAME
+export SUBSCRIPTION RESOURCE_GROUP VM_NAME
 
-VM_SIZE="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+VM_SIZE="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
   --query hardwareProfile.vmSize -o tsv | tr -d '\r')"
-if ! TENSOR_PARALLEL_SIZE="$(vm_size_tensor_parallel_size "$VM_SIZE")"; then
+case "$VM_SIZE" in
+  Standard_NC40ads_H100_v5|Standard_NC80adis_H100_v5) ;;
+  *)
   echo "ERROR: unsupported VM size '${VM_SIZE}' for ${VM_NAME}; expected Standard_NC40ads_H100_v5 or Standard_NC80adis_H100_v5" >&2
   exit 2
-fi
-echo "VM size: ${VM_SIZE} (vLLM tensor parallel size ${TENSOR_PARALLEL_SIZE})"
+  ;;
+esac
 
 ENV_LINES=""
 if [ -f .env ]; then
   ENV_LINES="$(tr -d '\r' < .env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.+' || true)"
 fi
-ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v -e '^QWEN38_27B_TENSOR_PARALLEL_SIZE=' -e '^$' || true)"
-ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}QWEN38_27B_TENSOR_PARALLEL_SIZE=${TENSOR_PARALLEL_SIZE}"
+ENV_MODEL_ID="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^MODEL_ID=//p' | tail -n 1)"
+MODEL_ID="${MODEL_ID:-${ENV_MODEL_ID:-qwen3.8-27b-fp8}}"
+if ! PROFILE_JSON="$(python3 scripts/model_profile.py resolve "$MODEL_ID" "$VM_SIZE")"; then
+  echo "ERROR: MODEL_ID '${MODEL_ID}' cannot be deployed on ${VM_SIZE}" >&2
+  exit 2
+fi
+PROFILE_STATUS="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.status')"
+PROFILE_TP="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.tensor_parallel_size')"
+PROFILE_REPO="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.repo')"
+PROFILE_REVISION="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.revision')"
+echo "VM size: ${VM_SIZE}"
+echo "Model: ${MODEL_ID} (${PROFILE_STATUS}, tensor parallel ${PROFILE_TP})"
+echo "Checkpoint: ${PROFILE_REPO}@${PROFILE_REVISION}"
+if [ "$PROFILE_STATUS" = candidate ]; then
+  echo "WARNING: this exact model/VM profile is a candidate and has not yet been hardware-validated" >&2
+fi
+
+ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v \
+  -e '^MODEL_ID=' \
+  -e '^MODEL_VM_SIZE=' \
+  -e '^MODEL_REPO=' \
+  -e '^MODEL_REVISION=' \
+  -e '^MODEL_DIR=' \
+  -e '^LLM_MODEL=' \
+  -e '^QWEN38_27B_' \
+  -e '^$' || true)"
+ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}MODEL_ID=${MODEL_ID}"
+ENV_LINES="${ENV_LINES}"$'\n'"MODEL_VM_SIZE=${VM_SIZE}"
 NGROK_MODE=disabled
+MONITORING_MODE=disabled
 if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
   NGROK_AUTHTOKEN_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_AUTHTOKEN=//p' | tail -n 1)"
   NGROK_URL_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_URL=//p' | tail -n 1)"
@@ -75,17 +105,37 @@ if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
   fi
 fi
 
-# The ingestion identity attached to the VM decides the collector's client ID.
-INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
-  --query "keys(identity.userAssignedIdentities || \`{}\`)[?contains(@, '/id-llm-ingest-')] | [0]" \
-  -o tsv | tr -d '\r')"
-if [ -n "$INGEST_ID" ]; then
+if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
+  telemetry_destinations=0
+  for key in AZMON_APPLICATION_ID AZMON_TRACES_ENDPOINT AZMON_LOGS_ENDPOINT AZMON_METRICS_ENDPOINT; do
+    value="$(printf '%s\n' "$ENV_LINES" | sed -n "s/^${key}=//p" | tail -n 1)"
+    if [ -n "$value" ] && [[ "$value" != *"<"* ]] && [ "$value" != 00000000-0000-0000-0000-000000000000 ]; then
+      telemetry_destinations=$((telemetry_destinations + 1))
+    fi
+  done
+  case "$telemetry_destinations" in
+    0) MONITORING_MODE=disabled ;;
+    4) MONITORING_MODE=enabled ;;
+    *)
+      echo "ERROR: telemetry is partially configured; provision monitoring or use COMPOSE_FILES=\"-f compose.yaml\"" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [ "$ACTION" = up ] && { [ "$MONITORING_MODE" = enabled ] || [[ "${COMPOSE_FILES:-}" == *compose.observability.yaml* ]]; }; then
+  # The ingestion identity attached to the VM decides the collector's client ID.
+  INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)[?contains(@, '/id-llm-ingest-')] | [0]" \
+    -o tsv | tr -d '\r')"
+  if [ -z "$INGEST_ID" ]; then
+    echo "ERROR: monitoring was selected but no id-llm-ingest-* identity is attached to ${VM_NAME}" >&2
+    exit 2
+  fi
   UAMI_CLIENT_ID="$(az identity show --ids "$INGEST_ID" --query clientId -o tsv | tr -d '\r')"
   echo "ingestion identity: ${INGEST_ID##*/} (client ID ${UAMI_CLIENT_ID})"
   ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v -e '^TELEMETRY_UAMI_CLIENT_ID=' -e '^$' || true)"
   ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}TELEMETRY_UAMI_CLIENT_ID=${UAMI_CLIENT_ID}"
-else
-  echo "WARNING: no id-llm-ingest-* identity attached to ${VM_NAME}; telemetry export won't authenticate" >&2
 fi
 
 ENV_B64=""
@@ -100,6 +150,13 @@ set -euo pipefail
 mkdir -p $REMOTE_DIR && cd $REMOTE_DIR
 echo '$PAYLOAD' | base64 -d | tar -xzf - --no-same-owner
 echo '$ENV_B64' | base64 -d | bash scripts/merge-env.sh
+sed -i \
+  -e '/^MODEL_REPO=/d' \
+  -e '/^MODEL_REVISION=/d' \
+  -e '/^MODEL_DIR=/d' \
+  -e '/^LLM_MODEL=/d' \
+  -e '/^QWEN38_27B_/d' \
+  .env
 mkdir -p /data/models /data/vllm-cache
 echo "synced to $REMOTE_DIR"
 if [ "$ACTION" = "up" ]; then
@@ -108,7 +165,14 @@ if [ "$ACTION" = "up" ]; then
     read -r -a compose_args <<< "\$compose_files"
     echo "compose files: \$compose_files (explicit override)"
   else
-    compose_args=(-f compose.yaml -f compose.observability.yaml)
+    compose_args=(-f compose.yaml)
+    if [ "$MONITORING_MODE" = enabled ]; then
+      compose_args+=(-f compose.observability.yaml)
+      echo "monitoring enabled"
+    else
+      echo "monitoring disabled: telemetry values are not provisioned"
+      docker rm -f llm-otel-collector llm-dcgm-exporter >/dev/null 2>&1 || true
+    fi
     if [ "$NGROK_MODE" = enabled ]; then
       compose_args+=(-f compose.ngrok.yaml)
       echo "ngrok enabled"
@@ -127,8 +191,9 @@ if [ "$ACTION" = "up" ]; then
   # although the model went healthy minutes later. A second up waits for it
   # and starts them, so retry up to twice.
   systemctl reset-failed llm-compose-up 2>/dev/null || true
+  docker rm -f qwen3.8-27b >/dev/null 2>&1 || true
   systemd-run --unit=llm-compose-up --collect --working-directory=$REMOTE_DIR \
-    bash -c "up() { docker compose \"\\\$@\" up -d >> /var/log/llm-compose-up.log 2>&1; }; \
+    bash -c "up() { docker compose \"\\\$@\" up -d --remove-orphans >> /var/log/llm-compose-up.log 2>&1; }; \
       up \"\\\$@\" || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up \"\\\$@\"; } \
                     || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up \"\\\$@\"; }" \
     _ "\${compose_args[@]}"

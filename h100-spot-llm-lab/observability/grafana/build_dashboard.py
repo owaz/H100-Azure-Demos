@@ -129,7 +129,7 @@ NOW = "2m"
 IN_C = 'vllm:prompt_tokens_by_source_total{source="local_compute"}'
 IN_H = 'vllm:prompt_tokens_by_source_total{source="local_cache_hit"}'
 OUT = 'vllm:generation_tokens_total'
-MAX_SEQS = 32  # vLLM --max-num-seqs (QWEN38_27B_MAX_NUM_SEQS in .env)
+MAX_SEQS = "$max_num_seqs"
 
 # ---------------------------------------------------------------- Overview
 row("Overview")
@@ -149,8 +149,9 @@ stat("Request tok/s", f'1 / histogram_quantile(0.5, sum(rate(vllm:inter_token_la
      "short", 15, w=3, decimals=0, no_value="Idle",
      desc="Output tokens per second one request sees now (1 / median inter-token latency).")
 stat("Concurrency", 'sum(vllm:num_requests_running)', "short", 18, w=3, decimals=0, no_value="0",
-     thresholds=[{"color": "blue", "value": None}, {"color": WARN, "value": MAX_SEQS}],
-     desc=f"Requests vLLM is serving now. The server runs at most {MAX_SEQS} at once (--max-num-seqs); more wait in the queue.")
+     thresholds=[{"color": "blue", "value": None}],
+     desc="Requests vLLM is serving now. The active profile limit is ${max_num_seqs} "
+          "(--max-num-seqs); additional requests wait in the queue.")
 stat("Model server", 'max(up{"service.name"="vllm"})', "none", 21, w=3,
      thresholds=[{"color": BAD, "value": None}, {"color": GOOD, "value": 1}], color_mode="background",
      mappings=[{"type": "value", "options": {"0": {"text": "Down"}, "1": {"text": "Up"}}},
@@ -206,8 +207,8 @@ text("Assumptions",
      "prices you want to compare against.\n\n"
      "Token counts come from vLLM. Output includes reasoning tokens. VM hours count only "
      "minutes in which the model server answered its scrape.\n\n"
-     f"Capacity reference (benchmark, real text, 512-token replies): about **1,550 output tokens/s** "
-     f"at {MAX_SEQS} concurrent requests, **166 tokens/s** for a single request.",
+     "Set **Max sequences** to the active catalog profile's `max_num_seqs` value. "
+     "The concurrency panels use it as their capacity reference.",
      16, 8, 10)
 advance(10)
 
@@ -259,11 +260,16 @@ ts("Per-request output speed", [
 ts("Concurrent requests", [
     target('sum(vllm:num_requests_running)', "running in vLLM"),
     target('sum(vllm:num_requests_waiting)', "waiting in vLLM", "B"),
-    target('sum(litellm_in_flight_requests)', "in flight at LiteLLM", "C")],
-   "short", 12, w=12, h=9, maxv=MAX_SEQS + 4,
-   thresholds=[{"color": "transparent", "value": None}, {"color": WARN, "value": MAX_SEQS}],
-   desc=f"Requests in progress. The dashed line is the {MAX_SEQS}-request limit (--max-num-seqs): "
-        "above it requests wait for a slot. LiteLLM counts a request from arrival to its last byte, so it reads slightly higher.")
+    target('sum(litellm_in_flight_requests)', "in flight at LiteLLM", "C"),
+    target('vector($max_num_seqs)', "profile limit", "D")],
+   "short", 12, w=12, h=9,
+   overrides=[{"matcher": {"id": "byName", "options": "profile limit"},
+               "properties": [{"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+                              {"id": "custom.fillOpacity", "value": 0},
+                              {"id": "color", "value": {"mode": "fixed", "fixedColor": WARN}}]}],
+   desc="Requests in progress. The dashed line is the selected profile's ${max_num_seqs}-request "
+        "limit (--max-num-seqs); above it requests wait for a slot. LiteLLM counts a request from "
+        "arrival to its last byte, so it reads slightly higher.")
 advance(9)
 ts("Input tokens per request", [
     target(f'histogram_quantile(0.5, sum(rate(vllm:request_prompt_tokens[{RI}])))', "p50"),
@@ -516,6 +522,7 @@ advance(12)
 
 # Token prices default to a public list price for Qwen3.8-27B in October 2026.
 VARIABLES = [  # name, label, default (USD); edit them at the top of the dashboard
+    ("max_num_seqs", "Max sequences", "32"),
     ("vm_usd_per_hour", "VM $/hour", "2"),
     ("price_input", "Input $/1M", "0.425"),
     ("price_cached_input", "Cached input $/1M", "0.085"),
@@ -551,7 +558,7 @@ dashboard = {
     "__inputs": INPUTS,
     "uid": "h100-llm",
     "title": "h100-llm",
-    "description": "Self-hosted Qwen3.8-27B on an Azure Spot H100 VM: token throughput and economics, gateway traffic, vLLM serving, GPU, host and telemetry pipeline.",
+    "description": "Self-hosted open models on an Azure Spot H100 VM: token throughput and economics, gateway traffic, vLLM serving, GPU, host and telemetry pipeline.",
     "tags": ["llm-self-hosting", "vllm", "gpu"],
     "timezone": "utc",
     "editable": True,

@@ -2,7 +2,7 @@
 
 Azure Spot Virtual Machines make unused Azure GPU capacity available at a lower price in exchange for interruptible availability. That trade-off is a strong fit for quick pilots, proofs of concept (PoCs), benchmarks, evaluations, and demos that need powerful GPUs for a limited time but do not require production uptime.
 
-This repository turns that low-priority GPU approach into an end-to-end Azure deployment for serving Qwen3.8-27B on one or two H100 GPUs. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
+This repository turns that low-priority GPU approach into an end-to-end Azure deployment for serving a curated catalog of open models on one or two H100 GPUs. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
 
 ## Why use Spot GPUs for pilots and PoCs?
 
@@ -26,14 +26,31 @@ The current demo lives in [`h100-spot-llm-lab/`](h100-spot-llm-lab/). It automat
 
 The demo includes:
 
-- **GPU inference**: Qwen3.8-27B FP8 on `Standard_NC40ads_H100_v5` (one GPU) or `Standard_NC80adis_H100_v5` (two GPUs)
-- **Model server**: vLLM with FP8 key-value cache, prefix caching, and Multi-Token Prediction (MTP)
+- **GPU inference**: pinned permissive checkpoints selected for `Standard_NC40ads_H100_v5` (one GPU) or `Standard_NC80adis_H100_v5` (two GPUs)
+- **Model server**: profile-driven vLLM with model-appropriate parallelism, context, cache, parser, and speculative settings
 - **API gateway**: LiteLLM exposes an OpenAI-compatible API and records model telemetry
 - **Private host**: the VM has no public IP or Secure Shell (SSH) ingress
 - **Optional public access**: ngrok publishes the gateway with an Internet Protocol (IP) allow-list
 - **Azure monitoring**: OpenTelemetry sends metrics, logs, and traces to Azure Monitor
 - **Grafana dashboard**: panels cover cost, tokens, latency, GPU load, host health, traces, and logs
 - **Operations**: scripts provision, deploy, benchmark, inspect, start, stop, and remove the stack
+
+### Available models
+
+The checked-in catalog currently includes:
+
+- **Qwen3.8 27B FP8** (`Qwen/Qwen3.8-27B-FP8`)
+- **OpenAI gpt-oss-20b** (`openai/gpt-oss-20b`)
+- **OpenAI gpt-oss-120b** (`openai/gpt-oss-120b`)
+- **Qwen3 32B FP8** (`Qwen/Qwen3-32B-FP8`)
+- **Qwen3 30B-A3B Instruct 2507** (`Qwen/Qwen3-30B-A3B-Instruct-2507`)
+- **Mistral Small 3.1 24B** (`mistralai/Mistral-Small-3.1-24B-Instruct-2503`)
+- **Qwen2.5 72B Instruct** (`Qwen/Qwen2.5-72B-Instruct`, NC80 only)
+- **Qwen3-Next 80B-A3B Instruct** (`Qwen/Qwen3-Next-80B-A3B-Instruct`, NC80 only)
+
+NC80 offers all NC40-compatible models plus the two NC80-only models. See the
+lab [model compatibility matrix](h100-spot-llm-lab/README.md#model-catalog-and-compatibility)
+for validation status and download sizes.
 
 ## Architecture
 
@@ -51,7 +68,7 @@ Client
       vLLM on 127.0.0.1:8096
          |
          v
-      Qwen3.8-27B FP8 on one or two H100 NVL GPUs
+      Selected catalog model on one or two H100 NVL GPUs
 
 LiteLLM traces -------+
 vLLM metrics ---------+
@@ -71,23 +88,18 @@ Every service binds to localhost on the VM. Azure Network Security Group rules d
 
 ## Model serving
 
-The demo downloads the pinned [`Qwen/Qwen3.8-27B-FP8`](https://huggingface.co/Qwen/Qwen3.8-27B-FP8) checkpoint to a persistent data disk. The container then runs without Hugging Face network access.
-
-The vLLM configuration targets one 94 GB H100 NVL on NC40 or uses tensor parallelism across two on NC80:
-
-- Native 262K context window
-- FP8 weights and key-value cache
-- Prefix caching
-- Three speculative MTP tokens
-- Up to 32 concurrent sequences
-- Automatic tool selection with the Qwen parser
-- Image input with bounded image count and dimensions
+The interactive launcher filters the pinned catalog by the selected VM size.
+NC80 includes all NC40-compatible choices plus larger two-GPU checkpoints.
+Catalog profiles define tensor parallelism, context, cache type, concurrency,
+parsers, and optional speculative decoding for each model/SKU combination.
+Checkpoints are stored on a persistent data disk, and the serving container
+runs without Hugging Face network access after download.
 
 LiteLLM publishes the model as `local-llm`. Clients can use the OpenAI chat completions interface without knowing the internal vLLM service address.
 
 ## Azure infrastructure
 
-[`infra/provision-spot-vm.sh`](h100-spot-llm-lab/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities.
+[`infra/provision-spot-vm.sh`](h100-spot-llm-lab/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities. `RESOURCE_GROUP` is the single resource-group input shared by compute and monitoring, so deleting that group removes the complete lab.
 
 The VM uses Azure Spot capacity by default. For new VMs, the provisioner offers the one-GPU NC40 and two-GPU NC80 sizes; `VM_SIZE` provides the same choice for non-interactive runs. [`infra/spot-regions.sh`](h100-spot-llm-lab/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment and accepts `SKU` to select the size to inspect. You can remove the Spot flags when you need regular capacity and have the required quota.
 
@@ -158,9 +170,9 @@ Run these commands from the demo directory:
 ```bash
 cd h100-spot-llm-lab
 cp .env.example .env
+export RESOURCE_GROUP=rg-llm-h100-lab
 LOCATION=southeastasia infra/provision-monitoring.sh
-LOCATION=southeastasia \
-  IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+LOCATION=southeastasia infra/provision-spot-vm.sh
 scripts/vm-run.sh scripts/bootstrap-host.sh
 scripts/deploy.sh up
 scripts/vm-run.sh scripts/smoke-test.sh

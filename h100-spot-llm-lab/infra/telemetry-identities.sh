@@ -11,20 +11,20 @@
 # "does not have access to identity ... with isolation scope 'Regional'";
 # ARM preflight validation doesn't catch it, so create one per region you use.
 #
-#   ID_RG=rg-llm-telemetry DCR_ID=/subscriptions/.../dataCollectionRules/... \
+#   RESOURCE_GROUP=rg-llm-lab DCR_ID=/subscriptions/.../dataCollectionRules/... \
 #     REGIONS="southeastasia uksouth" infra/telemetry-identities.sh
 #
 # Normally infra/provision-monitoring.sh calls this helper after provisioning
 # the workspaces, Application Insights resource, DCE and DCR.
 #
-# Then provision with IDENTITY_RG=rg-llm-telemetry so infra/provision-spot-vm.sh
-# attaches id-llm-ingest-<region>. Idempotent: existing identities and role
-# assignments are reused or updated.
+# The VM provisioner finds id-llm-ingest-<region> in the same RESOURCE_GROUP
+# automatically. Idempotent: existing identities and role assignments are
+# reused or updated.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
-ID_SUBSCRIPTION="${ID_SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"
-ID_RG="${ID_RG:?set ID_RG to the resource group that holds the identities}"
+SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"
+RESOURCE_GROUP="${RESOURCE_GROUP:?set RESOURCE_GROUP to the lab resource group}"
 DCR_ID="${DCR_ID:?set DCR_ID to the resource ID of the Application Insights data collection rule}"
 REGIONS="${REGIONS:?set REGIONS to the regions the VM may run in, e.g. \"southeastasia uksouth\"}"
 ID_PREFIX="${ID_PREFIX:-id-llm-ingest}"
@@ -35,10 +35,10 @@ TAGS=(project=llm-self-hosting purpose=otlp-ingestion)
 for region in $REGIONS; do
   name="${ID_PREFIX}-${region}"
   echo "==> Identity ${name} (${region})"
-  az identity create --subscription "$ID_SUBSCRIPTION" -g "$ID_RG" -n "$name" -l "$region" \
+  az identity create --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$name" -l "$region" \
     --tags "${TAGS[@]}" region="$region" -o none
-  id="$(az identity show --subscription "$ID_SUBSCRIPTION" -g "$ID_RG" -n "$name" --query id -o tsv | tr -d '[:space:]')"
-  principal="$(az identity show --subscription "$ID_SUBSCRIPTION" -g "$ID_RG" -n "$name" --query principalId -o tsv | tr -d '[:space:]')"
+  id="$(az identity show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$name" --query id -o tsv | tr -d '[:space:]')"
+  principal="$(az identity show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$name" --query principalId -o tsv | tr -d '[:space:]')"
 
   echo "    restrict: Regional isolation, Microsoft.Compute only"
   az rest --method patch --url "https://management.azure.com${id}?api-version=${IDENTITY_API}" \
@@ -59,5 +59,5 @@ for region in $REGIONS; do
 done
 
 echo "==> Ingestion identities"
-az identity list --subscription "$ID_SUBSCRIPTION" -g "$ID_RG" \
+az identity list --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
   --query "[?starts_with(name,'${ID_PREFIX}-')].{name:name, region:location, clientId:clientId}" -o table

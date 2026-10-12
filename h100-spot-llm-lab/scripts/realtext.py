@@ -13,9 +13,25 @@ import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from model_profile import load_catalog, resolve_profile
 
 URL = "http://127.0.0.1:8096/v1/chat/completions"
 OUT = 512
+ROOT = Path(__file__).resolve().parents[1]
+ENV = {}
+for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
+    if "=" in line and not line.startswith("#"):
+        key, value = line.split("=", 1)
+        ENV[key] = value
+MODEL_ID = ENV["MODEL_ID"]
+PROFILE = resolve_profile(
+    load_catalog(ROOT / "config" / "models.json"),
+    MODEL_ID,
+    ENV["MODEL_VM_SIZE"],
+)
+CHAT_TEMPLATE_KWARGS = PROFILE["model"]["smoke"]["chat_template_kwargs"]
 TOPICS = [
     "how TCP congestion control works", "the history of the printing press",
     "how a compiler optimizes loops", "photosynthesis in C4 plants",
@@ -30,11 +46,11 @@ TOPICS = [
 
 def one(i):
     body = {
-        "model": "qwen3.8-27b",
+        "model": MODEL_ID,
         "messages": [{"role": "user", "content":
                       f"Write a detailed technical explanation of {TOPICS[i % len(TOPICS)]}."}],
         "max_tokens": OUT, "min_tokens": OUT, "ignore_eos": True, "temperature": 0.7,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": CHAT_TEMPLATE_KWARGS,
     }
     req = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as r:

@@ -2,8 +2,8 @@
 # Provision the Azure resources used by compose.observability.yaml.
 #
 # The script is idempotent and supports either deployment order:
-#   LOCATION=southeastasia infra/provision-monitoring.sh
-#   LOCATION=southeastasia ZONE=none IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+#   RESOURCE_GROUP=rg-llm-lab LOCATION=southeastasia infra/provision-monitoring.sh
+#   RESOURCE_GROUP=rg-llm-lab LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh
 #
 # Or provision the VM first; this script then attaches the regional ingestion
 # identity to every tagged stack VM in LOCATION.
@@ -21,13 +21,7 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
 
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"
 LOCATION="${LOCATION:-}"
-MONITORING_RG="${MONITORING_RG:-rg-llm-telemetry}"
-LAW_NAME="${LAW_NAME:-law-llm-telemetry}"
-AMW_NAME="${AMW_NAME:-amw-llm-telemetry}"
-APP_INSIGHTS_NAME="${APP_INSIGHTS_NAME:-appi-llm-telemetry}"
-DCE_NAME="${DCE_NAME:-dce-llm-telemetry}"
-DCR_NAME="${DCR_NAME:-dcr-llm-telemetry}"
-DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-deploy-llm-monitoring}"
+RESOURCE_GROUP="${RESOURCE_GROUP:-}"
 WRITE_ENV="${WRITE_ENV:-1}"
 ATTACH_VMS="${ATTACH_VMS:-1}"
 ENV_FILE="${ENV_FILE:-${ROOT}/.env}"
@@ -37,15 +31,33 @@ az_sub() {
   command az "$@" --subscription "$SUBSCRIPTION"
 }
 
+resolve_resource_group() {
+  if [ -n "$RESOURCE_GROUP" ]; then
+    return
+  fi
+  if [ ! -t 0 ]; then
+    echo "RESOURCE_GROUP is required in non-interactive mode" >&2
+    exit 2
+  fi
+  read -r -p "Azure resource group: " RESOURCE_GROUP
+  [ -n "$RESOURCE_GROUP" ] || {
+    echo "resource group is required" >&2
+    exit 2
+  }
+}
+
 case "$WRITE_ENV" in 0|1) ;; *) echo "WRITE_ENV must be 0 or 1" >&2; exit 2 ;; esac
 case "$ATTACH_VMS" in 0|1) ;; *) echo "ATTACH_VMS must be 0 or 1" >&2; exit 2 ;; esac
 [ -f "$TEMPLATE" ] || { echo "monitoring template not found: ${TEMPLATE}" >&2; exit 1; }
+resolve_resource_group
 
 if [ -z "$LOCATION" ]; then
   # shellcheck source=../scripts/lib/find-vm.sh
   . "${ROOT}/scripts/lib/find-vm.sh"
-  rc=0
-  find_stack_vm || rc=$?
+  rc=1
+  if [ "$(az_sub group exists -n "$RESOURCE_GROUP" -o tsv)" = true ]; then
+    find_stack_vm || rc=$?
+  fi
   case "$rc" in
     0)
       LOCATION="$FOUND_LOCATION"
@@ -63,8 +75,16 @@ if [ -z "$LOCATION" ]; then
   esac
 fi
 
+LOCATION_KEY="$(printf '%s' "$LOCATION" | tr '[:upper:]' '[:lower:]')"
+LAW_NAME="${LAW_NAME:-law-llm-telemetry-${LOCATION_KEY}}"
+AMW_NAME="${AMW_NAME:-amw-llm-telemetry-${LOCATION_KEY}}"
+APP_INSIGHTS_NAME="${APP_INSIGHTS_NAME:-appi-llm-telemetry-${LOCATION_KEY}}"
+DCE_NAME="${DCE_NAME:-dce-llm-telemetry-${LOCATION_KEY}}"
+DCR_NAME="${DCR_NAME:-dcr-llm-telemetry-${LOCATION_KEY}}"
+DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-deploy-llm-monitoring-${LOCATION_KEY}}"
+
 echo "==> Subscription ${SUBSCRIPTION}"
-echo "==> Monitoring resource group ${MONITORING_RG} (${LOCATION})"
+echo "==> Resource group ${RESOURCE_GROUP} (${LOCATION})"
 
 for provider in Microsoft.OperationalInsights Microsoft.Insights Microsoft.Monitor Microsoft.ManagedIdentity; do
   state="$(az_sub provider show -n "$provider" --query registrationState -o tsv)"
@@ -74,7 +94,7 @@ for provider in Microsoft.OperationalInsights Microsoft.Insights Microsoft.Monit
   fi
 done
 
-az_sub group create -n "$MONITORING_RG" -l "$LOCATION" --tags "${TAGS[@]}" -o none
+az_sub group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags "${TAGS[@]}" -o none
 
 check_location() {
   local label="$1"
@@ -82,53 +102,53 @@ check_location() {
   if [ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" != \
        "$(printf '%s' "$LOCATION" | tr '[:upper:]' '[:lower:]')" ]; then
     echo "ERROR: ${label} already exists in ${actual}, expected ${LOCATION}" >&2
-    echo "Use different resource names or a different MONITORING_RG." >&2
+    echo "Use different resource names or a different RESOURCE_GROUP." >&2
     exit 1
   fi
 }
 
-if az_sub monitor log-analytics workspace show -g "$MONITORING_RG" -n "$LAW_NAME" -o none 2>/dev/null; then
+if az_sub monitor log-analytics workspace show -g "$RESOURCE_GROUP" -n "$LAW_NAME" -o none 2>/dev/null; then
   check_location "$LAW_NAME" "$(az_sub monitor log-analytics workspace show \
-    -g "$MONITORING_RG" -n "$LAW_NAME" --query location -o tsv)"
+    -g "$RESOURCE_GROUP" -n "$LAW_NAME" --query location -o tsv)"
   echo "==> Reusing Log Analytics workspace ${LAW_NAME}"
 else
   echo "==> Creating Log Analytics workspace ${LAW_NAME}"
-  az_sub monitor log-analytics workspace create -g "$MONITORING_RG" -n "$LAW_NAME" \
+  az_sub monitor log-analytics workspace create -g "$RESOURCE_GROUP" -n "$LAW_NAME" \
     -l "$LOCATION" --tags "${TAGS[@]}" -o none
 fi
-LAW_ID="$(az_sub monitor log-analytics workspace show -g "$MONITORING_RG" \
+LAW_ID="$(az_sub monitor log-analytics workspace show -g "$RESOURCE_GROUP" \
   -n "$LAW_NAME" --query id -o tsv | tr -d '\r')"
 
-if az_sub monitor account show -g "$MONITORING_RG" -n "$AMW_NAME" -o none 2>/dev/null; then
+if az_sub monitor account show -g "$RESOURCE_GROUP" -n "$AMW_NAME" -o none 2>/dev/null; then
   check_location "$AMW_NAME" "$(az_sub monitor account show \
-    -g "$MONITORING_RG" -n "$AMW_NAME" --query location -o tsv)"
+    -g "$RESOURCE_GROUP" -n "$AMW_NAME" --query location -o tsv)"
   echo "==> Reusing Azure Monitor workspace ${AMW_NAME}"
 else
   echo "==> Creating Azure Monitor workspace ${AMW_NAME}"
-  az_sub monitor account create -g "$MONITORING_RG" -n "$AMW_NAME" \
+  az_sub monitor account create -g "$RESOURCE_GROUP" -n "$AMW_NAME" \
     -l "$LOCATION" --tags "${TAGS[@]}" -o none
 fi
-AMW_ID="$(az_sub monitor account show -g "$MONITORING_RG" \
+AMW_ID="$(az_sub monitor account show -g "$RESOURCE_GROUP" \
   -n "$AMW_NAME" --query id -o tsv | tr -d '\r')"
 
-if existing_app_location="$(az_sub resource show -g "$MONITORING_RG" \
+if existing_app_location="$(az_sub resource show -g "$RESOURCE_GROUP" \
     -n "$APP_INSIGHTS_NAME" --resource-type Microsoft.Insights/components \
     --api-version 2020-02-02 --query location -o tsv 2>/dev/null)"; then
   check_location "$APP_INSIGHTS_NAME" "$existing_app_location"
 fi
-if existing_dce_location="$(az_sub resource show -g "$MONITORING_RG" \
+if existing_dce_location="$(az_sub resource show -g "$RESOURCE_GROUP" \
     -n "$DCE_NAME" --resource-type Microsoft.Insights/dataCollectionEndpoints \
     --api-version 2024-03-11 --query location -o tsv 2>/dev/null)"; then
   check_location "$DCE_NAME" "$existing_dce_location"
 fi
-if existing_dcr_location="$(az_sub resource show -g "$MONITORING_RG" \
+if existing_dcr_location="$(az_sub resource show -g "$RESOURCE_GROUP" \
     -n "$DCR_NAME" --resource-type Microsoft.Insights/dataCollectionRules \
     --api-version 2024-03-11 --query location -o tsv 2>/dev/null)"; then
   check_location "$DCR_NAME" "$existing_dcr_location"
 fi
 
 echo "==> Deploying Application Insights and OTLP routing"
-OUTPUTS="$(az_sub deployment group create -g "$MONITORING_RG" -n "$DEPLOYMENT_NAME" \
+OUTPUTS="$(az_sub deployment group create -g "$RESOURCE_GROUP" -n "$DEPLOYMENT_NAME" \
   --template-file "$TEMPLATE" \
   --parameters location="$LOCATION" applicationInsightsName="$APP_INSIGHTS_NAME" \
     dataCollectionEndpointName="$DCE_NAME" dataCollectionRuleName="$DCR_NAME" \
@@ -147,16 +167,16 @@ LOGS_INGESTION="$(output logsIngestionEndpoint)"
 METRICS_INGESTION="$(output metricsIngestionEndpoint)"
 
 echo "==> Creating regional ingestion identity and DCR role assignment"
-ID_SUBSCRIPTION="$SUBSCRIPTION" ID_RG="$MONITORING_RG" DCR_ID="$DCR_ID" \
+SUBSCRIPTION="$SUBSCRIPTION" RESOURCE_GROUP="$RESOURCE_GROUP" DCR_ID="$DCR_ID" \
   REGIONS="$LOCATION" "${SCRIPT_DIR}/telemetry-identities.sh"
 IDENTITY_NAME="id-llm-ingest-${LOCATION}"
-IDENTITY_ID="$(az_sub identity show -g "$MONITORING_RG" -n "$IDENTITY_NAME" \
+IDENTITY_ID="$(az_sub identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" \
   --query id -o tsv | tr -d '\r')"
-IDENTITY_CLIENT_ID="$(az_sub identity show -g "$MONITORING_RG" -n "$IDENTITY_NAME" \
+IDENTITY_CLIENT_ID="$(az_sub identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" \
   --query clientId -o tsv | tr -d '\r')"
 
 if [ "$ATTACH_VMS" = 1 ]; then
-  vm_rows="$(az_sub vm list \
+  vm_rows="$(az_sub vm list -g "$RESOURCE_GROUP" \
     --query "[?tags.project=='llm-self-hosting' && tags.role=='llm-h100' && location=='${LOCATION}'].[resourceGroup,name]" \
     -o tsv | tr -d '\r')"
   if [ -n "$vm_rows" ]; then
@@ -167,7 +187,7 @@ if [ "$ATTACH_VMS" = 1 ]; then
         --identities "$IDENTITY_ID" -o none
     done <<< "$vm_rows"
   else
-    echo "==> No tagged H100 VM in ${LOCATION}; provision one with IDENTITY_RG=${MONITORING_RG}"
+    echo "==> No tagged H100 VM in ${RESOURCE_GROUP} and ${LOCATION}; provision the VM in this resource group"
   fi
 fi
 

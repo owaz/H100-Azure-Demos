@@ -9,13 +9,6 @@ model_list:
       stream_timeout: 3600
     model_info:
       mode: chat
-      # 262,144-token served context minus the 16,384-token output reservation.
-      max_input_tokens: 245760
-      max_output_tokens: 16384
-      max_tokens: 16384
-      supports_reasoning: true
-      supports_vision: true
-      supports_function_calling: true
       supports_system_messages: true
 
 litellm_settings:
