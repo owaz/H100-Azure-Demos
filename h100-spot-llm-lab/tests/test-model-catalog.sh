@@ -21,10 +21,20 @@ printf '%s\n' "$nc80_ids" | grep -qx qwen3-next-80b-a3b-instruct
 
 python3 scripts/model_profile.py resolve qwen3.8-27b-fp8 "$NC40" |
   jq -e '.profile.status == "validated" and .profile.tensor_parallel_size == 1' >/dev/null
+python3 scripts/model_profile.py resolve qwen3-32b-fp8 "$NC80" |
+  jq -e '.profile.max_model_len == 32768' >/dev/null
 if python3 scripts/model_profile.py resolve qwen2.5-72b-instruct "$NC40" >/dev/null 2>&1; then
   echo "incompatible NC40 profile unexpectedly resolved" >&2
   exit 1
 fi
+
+bench_plan="$(
+  MODEL_ID=qwen2.5-72b-instruct VM_SIZE="$NC80" BENCH_PLAN_ONLY=1 scripts/bench.sh
+)"
+bench_context="$(printf '%s' "$bench_plan" | sed -n 's/.*max_model_len=\([0-9]*\).*/\1/p')"
+bench_total="$(printf '%s' "$bench_plan" | sed -n 's/.*total=\([0-9]*\).*/\1/p')"
+[ "$bench_context" = 16384 ]
+[ "$bench_total" -lt "$bench_context" ]
 
 MODEL_CATALOG="$PWD/config/models.json" \
 MODEL_ID=qwen3.8-27b-fp8 \
@@ -60,6 +70,11 @@ if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null
   echo "gated model unexpectedly validated" >&2
   exit 1
 fi
+jq 'del(.models[0].smoke)' config/models.json > "$tmp_catalog"
+if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null 2>&1; then
+  echo "model without smoke settings unexpectedly validated" >&2
+  exit 1
+fi
 jq '.models[0].vm_profiles.Standard_NC40ads_H100_v5.vllm_args += ["--model", "override"]' \
   config/models.json > "$tmp_catalog"
 if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null 2>&1; then
@@ -71,6 +86,12 @@ for file in scripts/*.sh scripts/lib/*.sh infra/*.sh tests/*.sh; do
   bash -n "$file"
 done
 python3 -m py_compile scripts/model_profile.py scripts/download_model.py scripts/serve_model.py scripts/realtext.py
+python3 observability/grafana/build_dashboard.py >/dev/null
+jq -e '
+  any(.templating.list[]; .name == "max_num_seqs" and .current.value == "32") and
+  any(.panels[]; .title == "Concurrent requests" and
+      any(.targets[]; .expr == "vector($max_num_seqs)"))
+' observability/grafana/h100-llm.json >/dev/null
 
 if command -v docker >/dev/null 2>&1; then
   MODEL_VM_SIZE="$NC40" docker compose -f compose.yaml config -q

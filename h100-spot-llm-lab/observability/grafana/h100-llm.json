@@ -10,7 +10,7 @@
   ],
   "uid": "h100-llm",
   "title": "h100-llm",
-  "description": "Self-hosted Qwen3.8-27B on an Azure Spot H100 VM: token throughput and economics, gateway traffic, vLLM serving, GPU, host and telemetry pipeline.",
+  "description": "Self-hosted open models on an Azure Spot H100 VM: token throughput and economics, gateway traffic, vLLM serving, GPU, host and telemetry pipeline.",
   "tags": [
     "llm-self-hosting",
     "vllm",
@@ -37,6 +37,24 @@
         "options": [],
         "refresh": 1,
         "regex": ""
+      },
+      {
+        "type": "textbox",
+        "name": "max_num_seqs",
+        "label": "Max sequences",
+        "query": "32",
+        "hide": 0,
+        "current": {
+          "text": "32",
+          "value": "32"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "32",
+            "value": "32"
+          }
+        ]
       },
       {
         "type": "textbox",
@@ -558,7 +576,7 @@
       "type": "stat",
       "id": 8,
       "title": "Concurrency",
-      "description": "Requests vLLM is serving now. The server runs at most 32 at once (--max-num-seqs); more wait in the queue.",
+      "description": "Requests vLLM is serving now. The active profile limit is ${max_num_seqs} (--max-num-seqs); additional requests wait in the queue.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -585,10 +603,6 @@
               {
                 "color": "blue",
                 "value": null
-              },
-              {
-                "color": "orange",
-                "value": 32
               }
             ]
           },
@@ -1244,7 +1258,7 @@
       "title": "Assumptions",
       "options": {
         "mode": "markdown",
-        "content": "Prices are the dashboard variables at the top, in USD:\n\n| Item | USD |\n|---|---|\n| VM | **${vm_usd_per_hour}** per hour |\n| Input (computed) | **${price_input}** per 1M tokens |\n| Input (prefix-cache hit) | **${price_cached_input}** per 1M tokens |\n| Output | **${price_output}** per 1M tokens |\n\nToken prices default to a public list price for Qwen3.8-27B in October 2026: $0.425 per 1M input tokens, $0.085 cached input and $2.55 output. Set them to the prices you want to compare against.\n\nToken counts come from vLLM. Output includes reasoning tokens. VM hours count only minutes in which the model server answered its scrape.\n\nCapacity reference (benchmark, real text, 512-token replies): about **1,550 output tokens/s** at 32 concurrent requests, **166 tokens/s** for a single request."
+        "content": "Prices are the dashboard variables at the top, in USD:\n\n| Item | USD |\n|---|---|\n| VM | **${vm_usd_per_hour}** per hour |\n| Input (computed) | **${price_input}** per 1M tokens |\n| Input (prefix-cache hit) | **${price_cached_input}** per 1M tokens |\n| Output | **${price_output}** per 1M tokens |\n\nToken prices default to a public list price for Qwen3.8-27B in October 2026: $0.425 per 1M input tokens, $0.085 cached input and $2.55 output. Set them to the prices you want to compare against.\n\nToken counts come from vLLM. Output includes reasoning tokens. VM hours count only minutes in which the model server answered its scrape.\n\nSet **Max sequences** to the active catalog profile's `max_num_seqs` value. The concurrency panels use it as their capacity reference."
       },
       "gridPos": {
         "x": 16,
@@ -2059,7 +2073,7 @@
       "type": "timeseries",
       "id": 32,
       "title": "Concurrent requests",
-      "description": "Requests in progress. The dashed line is the 32-request limit (--max-num-seqs): above it requests wait for a slot. LiteLLM counts a request from arrival to its last byte, so it reads slightly higher.",
+      "description": "Requests in progress. The dashed line is the selected profile's ${max_num_seqs}-request limit (--max-num-seqs); above it requests wait for a slot. LiteLLM counts a request from arrival to its last byte, so it reads slightly higher.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -2091,6 +2105,15 @@
           "expr": "sum(litellm_in_flight_requests)",
           "legendFormat": "in flight at LiteLLM",
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "vector($max_num_seqs)",
+          "legendFormat": "profile limit",
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -2108,30 +2131,43 @@
               "group": "A"
             },
             "gradientMode": "none",
-            "barAlignment": 0,
-            "thresholdsStyle": {
-              "mode": "dashed"
-            }
+            "barAlignment": 0
           },
           "color": {
             "mode": "palette-classic"
-          },
-          "max": 36,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "profile limit"
+            },
+            "properties": [
               {
-                "color": "transparent",
-                "value": null
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
               },
               {
-                "color": "orange",
-                "value": 32
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
               }
             ]
           }
-        },
-        "overrides": []
+        ]
       },
       "options": {
         "legend": {

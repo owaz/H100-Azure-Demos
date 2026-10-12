@@ -92,6 +92,7 @@ ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v \
 ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}MODEL_ID=${MODEL_ID}"
 ENV_LINES="${ENV_LINES}"$'\n'"MODEL_VM_SIZE=${VM_SIZE}"
 NGROK_MODE=disabled
+MONITORING_MODE=disabled
 if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
   NGROK_AUTHTOKEN_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_AUTHTOKEN=//p' | tail -n 1)"
   NGROK_URL_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_URL=//p' | tail -n 1)"
@@ -103,17 +104,37 @@ if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
   fi
 fi
 
-# The ingestion identity attached to the VM decides the collector's client ID.
-INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
-  --query "keys(identity.userAssignedIdentities || \`{}\`)[?contains(@, '/id-llm-ingest-')] | [0]" \
-  -o tsv | tr -d '\r')"
-if [ -n "$INGEST_ID" ]; then
+if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
+  telemetry_destinations=0
+  for key in AZMON_APPLICATION_ID AZMON_TRACES_ENDPOINT AZMON_LOGS_ENDPOINT AZMON_METRICS_ENDPOINT; do
+    value="$(printf '%s\n' "$ENV_LINES" | sed -n "s/^${key}=//p" | tail -n 1)"
+    if [ -n "$value" ] && [[ "$value" != *"<"* ]] && [ "$value" != 00000000-0000-0000-0000-000000000000 ]; then
+      telemetry_destinations=$((telemetry_destinations + 1))
+    fi
+  done
+  case "$telemetry_destinations" in
+    0) MONITORING_MODE=disabled ;;
+    4) MONITORING_MODE=enabled ;;
+    *)
+      echo "ERROR: telemetry is partially configured; provision monitoring or use COMPOSE_FILES=\"-f compose.yaml\"" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [ "$ACTION" = up ] && { [ "$MONITORING_MODE" = enabled ] || [[ "${COMPOSE_FILES:-}" == *compose.observability.yaml* ]]; }; then
+  # The ingestion identity attached to the VM decides the collector's client ID.
+  INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)[?contains(@, '/id-llm-ingest-')] | [0]" \
+    -o tsv | tr -d '\r')"
+  if [ -z "$INGEST_ID" ]; then
+    echo "ERROR: monitoring was selected but no id-llm-ingest-* identity is attached to ${VM_NAME}" >&2
+    exit 2
+  fi
   UAMI_CLIENT_ID="$(az identity show --ids "$INGEST_ID" --query clientId -o tsv | tr -d '\r')"
   echo "ingestion identity: ${INGEST_ID##*/} (client ID ${UAMI_CLIENT_ID})"
   ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v -e '^TELEMETRY_UAMI_CLIENT_ID=' -e '^$' || true)"
   ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}TELEMETRY_UAMI_CLIENT_ID=${UAMI_CLIENT_ID}"
-else
-  echo "WARNING: no id-llm-ingest-* identity attached to ${VM_NAME}; telemetry export won't authenticate" >&2
 fi
 
 ENV_B64=""
@@ -143,7 +164,14 @@ if [ "$ACTION" = "up" ]; then
     read -r -a compose_args <<< "\$compose_files"
     echo "compose files: \$compose_files (explicit override)"
   else
-    compose_args=(-f compose.yaml -f compose.observability.yaml)
+    compose_args=(-f compose.yaml)
+    if [ "$MONITORING_MODE" = enabled ]; then
+      compose_args+=(-f compose.observability.yaml)
+      echo "monitoring enabled"
+    else
+      echo "monitoring disabled: telemetry values are not provisioned"
+      docker rm -f llm-otel-collector llm-dcgm-exporter >/dev/null 2>&1 || true
+    fi
     if [ "$NGROK_MODE" = enabled ]; then
       compose_args+=(-f compose.ngrok.yaml)
       echo "ngrok enabled"

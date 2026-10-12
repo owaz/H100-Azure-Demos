@@ -12,15 +12,36 @@
 # decode figure from smoke-test.sh for real text.
 #
 # Overrides, e.g.:  scripts/vm-run.sh -c 'CONCURRENCY="1 16" bash /opt/llm-self-hosting/scripts/bench.sh'
-cd /opt/llm-self-hosting || exit 1
+if [ "${BENCH_PLAN_ONLY:-0}" = 1 ]; then
+  cd "$(dirname "$0")/.." || exit 1
+else
+  cd /opt/llm-self-hosting || exit 1
+fi
 CONCURRENCY="${CONCURRENCY:-1 4 16 32}"
 IN="${IN:-2000}"
 OUT="${OUT:-512}"
 CTR=llm-model
-MODEL_ID="$(sed -n 's/^MODEL_ID=//p' .env | tail -n 1)"
-VM_SIZE="$(sed -n 's/^MODEL_VM_SIZE=//p' .env | tail -n 1)"
+MODEL_ID="${MODEL_ID:-$(sed -n 's/^MODEL_ID=//p' .env | tail -n 1)}"
+VM_SIZE="${VM_SIZE:-$(sed -n 's/^MODEL_VM_SIZE=//p' .env | tail -n 1)}"
 PROFILE="$(python3 scripts/model_profile.py resolve "$MODEL_ID" "$VM_SIZE")" || exit 1
 MODEL_DIR="$(printf '%s' "$PROFILE" | jq -r '.model.model_dir')"
+MAX_MODEL_LEN="$(printf '%s' "$PROFILE" | jq -r '.profile.max_model_len')"
+[ "$((IN + OUT))" -le "$MAX_MODEL_LEN" ] || {
+  echo "random benchmark input + output (${IN} + ${OUT}) exceeds model context ${MAX_MODEL_LEN}" >&2
+  exit 2
+}
+
+PREFIX_OUTPUT="$OUT"
+PREFIX_SUFFIX=1000
+PREFIX_SAFETY=32
+PREFIX_LEN=$((MAX_MODEL_LEN - PREFIX_SUFFIX - PREFIX_OUTPUT - PREFIX_SAFETY))
+if [ "${BENCH_PLAN_ONLY:-0}" = 1 ]; then
+  printf 'model=%s max_model_len=%s prefix_len=%s suffix_len=%s output_len=%s total=%s\n' \
+    "$MODEL_ID" "$MAX_MODEL_LEN" "$PREFIX_LEN" "$PREFIX_SUFFIX" "$PREFIX_OUTPUT" \
+    "$((PREFIX_LEN + PREFIX_SUFFIX + PREFIX_OUTPUT))"
+  exit 0
+fi
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RES="/opt/llm-self-hosting/results/bench-${STAMP}"
 mkdir -p "$RES"
@@ -58,11 +79,15 @@ for c in $CONCURRENCY; do
     --dataset-name random --random-input-len "$IN" --random-output-len "$OUT"
 done
 
-# 8 distinct 16K-token prefixes, 4 prompts each with a 1K-token unique suffix.
-bench "prefix-c8" 8 32 \
-  --dataset-name prefix_repetition \
-  --prefix-repetition-prefix-len 16000 --prefix-repetition-suffix-len 1000 \
-  --prefix-repetition-num-prefixes 8 --prefix-repetition-output-len "$OUT"
+# Keep the shared-prefix request inside the selected profile's context.
+if [ "$PREFIX_LEN" -ge 1024 ]; then
+  bench "prefix-c8" 8 32 \
+    --dataset-name prefix_repetition \
+    --prefix-repetition-prefix-len "$PREFIX_LEN" --prefix-repetition-suffix-len "$PREFIX_SUFFIX" \
+    --prefix-repetition-num-prefixes 8 --prefix-repetition-output-len "$PREFIX_OUTPUT"
+else
+  echo "prefix-c8: SKIPPED (context ${MAX_MODEL_LEN} is too small after output and suffix reserves)"
+fi
 
 docker logs --since 15m "$CTR" 2>&1 | grep -E -o 'Mean acceptance length: [0-9.]+|Prefix cache hit rate: [0-9.]+%' | tail -2
 nvidia-smi --query-gpu=memory.used,power.draw --format=csv,noheader

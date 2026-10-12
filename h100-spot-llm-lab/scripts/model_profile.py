@@ -63,6 +63,9 @@ def validate_catalog(catalog: dict) -> None:
             isinstance(capabilities.get(key), bool) for key in ("reasoning", "tools")
         ):
             raise CatalogError(f"{model_id}: reasoning and tools capabilities must be booleans")
+        smoke = model.get("smoke")
+        if not isinstance(smoke, dict) or not isinstance(smoke.get("chat_template_kwargs"), dict):
+            raise CatalogError(f"{model_id}: smoke.chat_template_kwargs must be an object")
         profiles = model.get("vm_profiles")
         if not isinstance(profiles, dict) or not profiles:
             raise CatalogError(f"{model_id}: vm_profiles must be non-empty")
