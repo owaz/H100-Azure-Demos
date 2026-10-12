@@ -5,6 +5,7 @@
 #
 #   scripts/deploy.sh          # sync files only
 #   scripts/deploy.sh up       # sync, then `docker compose up -d` in the background
+#   DEPLOY_MODEL=0 scripts/deploy.sh sync   # sync with no selected/running model
 #   COMPOSE_FILES="-f compose.yaml" scripts/deploy.sh up   # model + gateway only
 #
 # By default `up` starts compose.yaml plus the telemetry overlay. The ngrok
@@ -30,6 +31,15 @@ export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/.."
 ACTION="${1:-sync}"
 case "$ACTION" in sync|up) ;; *) echo "usage: deploy.sh [sync|up]" >&2; exit 2 ;; esac
+DEPLOY_MODEL="${DEPLOY_MODEL:-1}"
+case "$DEPLOY_MODEL" in
+  0|1) ;;
+  *) echo "ERROR: DEPLOY_MODEL must be 0 or 1" >&2; exit 2 ;;
+esac
+if [ "$ACTION" = up ] && [ "$DEPLOY_MODEL" = 0 ]; then
+  echo "ERROR: DEPLOY_MODEL=0 supports sync only; model services cannot start without a model" >&2
+  exit 2
+fi
 REMOTE_DIR="/opt/llm-self-hosting"
 COMPOSE_FILES_B64="$(printf '%s' "${COMPOSE_FILES:-}" | base64 -w0)"
 
@@ -65,21 +75,7 @@ if [ -f .env ]; then
   ENV_LINES="$(tr -d '\r' < .env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.+' || true)"
 fi
 ENV_MODEL_ID="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^MODEL_ID=//p' | tail -n 1)"
-MODEL_ID="${MODEL_ID:-${ENV_MODEL_ID:-qwen3.8-27b-fp8}}"
-if ! PROFILE_JSON="$(python3 scripts/model_profile.py resolve "$MODEL_ID" "$VM_SIZE")"; then
-  echo "ERROR: MODEL_ID '${MODEL_ID}' cannot be deployed on ${VM_SIZE}" >&2
-  exit 2
-fi
-PROFILE_STATUS="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.status')"
-PROFILE_TP="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.tensor_parallel_size')"
-PROFILE_REPO="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.repo')"
-PROFILE_REVISION="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.revision')"
 echo "VM size: ${VM_SIZE}"
-echo "Model: ${MODEL_ID} (${PROFILE_STATUS}, tensor parallel ${PROFILE_TP})"
-echo "Checkpoint: ${PROFILE_REPO}@${PROFILE_REVISION}"
-if [ "$PROFILE_STATUS" = candidate ]; then
-  echo "WARNING: this exact model/VM profile is a candidate and has not yet been hardware-validated" >&2
-fi
 
 ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v \
   -e '^MODEL_ID=' \
@@ -90,8 +86,26 @@ ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v \
   -e '^LLM_MODEL=' \
   -e '^QWEN38_27B_' \
   -e '^$' || true)"
-ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}MODEL_ID=${MODEL_ID}"
-ENV_LINES="${ENV_LINES}"$'\n'"MODEL_VM_SIZE=${VM_SIZE}"
+if [ "$DEPLOY_MODEL" = 1 ]; then
+  MODEL_ID="${MODEL_ID:-${ENV_MODEL_ID:-qwen3.8-27b-fp8}}"
+  if ! PROFILE_JSON="$(python3 scripts/model_profile.py resolve "$MODEL_ID" "$VM_SIZE")"; then
+    echo "ERROR: MODEL_ID '${MODEL_ID}' cannot be deployed on ${VM_SIZE}" >&2
+    exit 2
+  fi
+  PROFILE_STATUS="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.status')"
+  PROFILE_TP="$(printf '%s' "$PROFILE_JSON" | jq -r '.profile.tensor_parallel_size')"
+  PROFILE_REPO="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.repo')"
+  PROFILE_REVISION="$(printf '%s' "$PROFILE_JSON" | jq -r '.model.revision')"
+  echo "Model: ${MODEL_ID} (${PROFILE_STATUS}, tensor parallel ${PROFILE_TP})"
+  echo "Checkpoint: ${PROFILE_REPO}@${PROFILE_REVISION}"
+  if [ "$PROFILE_STATUS" = candidate ]; then
+    echo "WARNING: this exact model/VM profile is a candidate and has not yet been hardware-validated" >&2
+  fi
+  ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}MODEL_ID=${MODEL_ID}"
+  ENV_LINES="${ENV_LINES}"$'\n'"MODEL_VM_SIZE=${VM_SIZE}"
+else
+  echo "Model: none (sync only)"
+fi
 NGROK_MODE=disabled
 MONITORING_MODE=disabled
 if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
@@ -157,6 +171,12 @@ sed -i \
   -e '/^LLM_MODEL=/d' \
   -e '/^QWEN38_27B_/d' \
   .env
+if [ "$DEPLOY_MODEL" = "0" ]; then
+  sed -i -e '/^MODEL_ID=/d' -e '/^MODEL_VM_SIZE=/d' .env
+  docker rm -f llm-model-download llm-model llm-litellm llm-ngrok \
+    llm-otel-collector llm-dcgm-exporter >/dev/null 2>&1 || true
+  echo "model services stopped; stack files are synced without a selected model"
+fi
 mkdir -p /data/models /data/vllm-cache
 echo "synced to $REMOTE_DIR"
 if [ "$ACTION" = "up" ]; then

@@ -109,6 +109,15 @@ if printf '' | scripts/launch.sh >/dev/null 2>&1; then
   exit 1
 fi
 
+no_model_up_output="$(mktemp)"
+if DEPLOY_MODEL=0 scripts/deploy.sh up >"$no_model_up_output" 2>&1; then
+  echo "deploy unexpectedly started services without a model" >&2
+  rm -f "$no_model_up_output"
+  exit 1
+fi
+grep -Fq "model services cannot start without a model" "$no_model_up_output"
+rm -f "$no_model_up_output"
+
 bash tests/test-resource-group.sh
 
 echo "model catalog tests: PASS"

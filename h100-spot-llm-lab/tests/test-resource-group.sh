@@ -69,4 +69,14 @@ grep -Fq 'RESOURCE_GROUP="$RESOURCE_GROUP"' infra/provision-monitoring.sh
 grep -Fq 'find_rc=0' scripts/launch.sh
 grep -Fq 'LAW_NAME="${LAW_NAME:-law-llm-telemetry-${LOCATION_KEY}}"' infra/provision-monitoring.sh
 
+size_prompt_line="$(grep -n 'Choose the target VM size' scripts/launch.sh | cut -d: -f1)"
+region_prompt_line="$(grep -n 'Azure region (for example southeastasia)' scripts/launch.sh | cut -d: -f1)"
+resource_group_prompt_line="$(grep -n 'Azure resource group:' scripts/launch.sh | cut -d: -f1)"
+[ "$size_prompt_line" -lt "$region_prompt_line" ]
+[ "$region_prompt_line" -lt "$resource_group_prompt_line" ]
+grep -Fq "Delete Azure resource group '" scripts/launch.sh
+grep -Fq 'az group delete --subscription "$SUBSCRIPTION" -n "$RESOURCE_GROUP" --yes --no-wait' scripts/launch.sh
+grep -Fq 'prompt_yes_no "Deploy a model now?" yes' scripts/launch.sh
+grep -Fq 'DEPLOY_MODEL=0 scripts/deploy.sh sync' scripts/launch.sh
+
 echo "resource group tests: PASS"
