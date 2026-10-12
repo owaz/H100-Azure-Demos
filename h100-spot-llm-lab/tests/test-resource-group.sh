@@ -14,7 +14,25 @@ if [ "$1 $2" = "vm list" ]; then
     $'2026-10-12T10:00:00Z\tvm-newer\trg-lab\tuksouth'
 elif [ "$1 $2" = "group exists" ]; then
   printf '%s\n' false
-elif [ "$1 $2" = "identity show" ] || [ "$1 $2" = "vm show" ]; then
+elif [ "$1 $2" = "identity show" ]; then
+  exit 1
+elif [ "$1 $2" = "vm show" ]; then
+  args=("$@")
+  requested_vm_name=""
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[$i]}" = "-n" ]; then
+      requested_vm_name="${args[$((i + 1))]}"
+      break
+    fi
+  done
+  if [ -n "${EXISTING_VM_NAME:-}" ] && [ "$requested_vm_name" = "$EXISTING_VM_NAME" ]; then
+    exit 0
+  fi
+  if [ -n "${EXISTING_VM_COUNT:-}" ] &&
+      [[ "$requested_vm_name" =~ ^vm-h100-uks-([0-9]+)$ ]] &&
+      [ "$((10#${BASH_REMATCH[1]}))" -le "$EXISTING_VM_COUNT" ]; then
+    exit 0
+  fi
   exit 1
 fi
 EOF
@@ -57,6 +75,30 @@ RESOURCE_GROUP=rg-partial LOCATION=southeastasia ZONE=2 \
 grep -Fq "network nsg create -g rg-partial -n nsg-llm-h100-sea-z2-261012" "$AZ_CALLS"
 grep -Fq "network public-ip create -g rg-partial -n pip-nat-llm-h100-sea-z2-261012" "$AZ_CALLS"
 grep -Fq "network vnet create -g rg-partial -n vnet-llm-h100-sea-z2-261012" "$AZ_CALLS"
+grep -Fq "vm create -g rg-partial -n vm-h100-sea-01" "$AZ_CALLS"
+
+>"$AZ_CALLS"
+EXISTING_VM_NAME=vm-h100-uks-01 RESOURCE_GROUP=rg-collision LOCATION=uksouth \
+  ZONE=none VM_SIZE=Standard_NC40ads_H100_v5 FORCE_NEW=1 DATE_SUFFIX=261012 \
+  infra/provision-spot-vm.sh >/dev/null
+grep -Fq "vm show -g rg-collision -n vm-h100-uks-01 -o none" "$AZ_CALLS"
+grep -Fq "vm create -g rg-collision -n vm-h100-uks-02" "$AZ_CALLS"
+
+>"$AZ_CALLS"
+EXISTING_VM_COUNT=99 RESOURCE_GROUP=rg-over-99 LOCATION=uksouth ZONE=none \
+  VM_SIZE=Standard_NC40ads_H100_v5 FORCE_NEW=1 DATE_SUFFIX=261012 \
+  infra/provision-spot-vm.sh >/dev/null
+grep -Fq "vm create -g rg-over-99 -n vm-h100-uks-100" "$AZ_CALLS"
+
+>"$AZ_CALLS"
+RESOURCE_GROUP=rg-override LOCATION=southeastasia ZONE=none \
+  VM_SIZE=Standard_NC40ads_H100_v5 FORCE_NEW=1 VM_NAME=vm-explicit \
+  DATE_SUFFIX=261012 infra/provision-spot-vm.sh >/dev/null
+grep -Fq "vm create -g rg-override -n vm-explicit" "$AZ_CALLS"
+if grep -Fq "vm-h100-sea-" "$AZ_CALLS"; then
+  echo "VM provisioner replaced an explicit VM_NAME" >&2
+  exit 1
+fi
 
 if grep -ERn '(^|[^A-Z_])(RG|MONITORING_RG|IDENTITY_RG|ID_RG)($|[^A-Z_])' \
     scripts infra; then
