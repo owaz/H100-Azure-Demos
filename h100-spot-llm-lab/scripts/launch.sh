@@ -269,6 +269,25 @@ scripts/vm-run.sh -c '
   echo "ERROR: stack did not become healthy within 40 minutes" >&2
   exit 1
 '
+if [ "$enable_ngrok" = 1 ]; then
+  echo "==> Waiting for the ngrok tunnel to become ready"
+  scripts/vm-run.sh -c '
+    set -e
+    deadline=$((SECONDS + 120))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+      ngrok_status="$(docker inspect --format "{{.State.Status}}" llm-ngrok 2>/dev/null || true)"
+      echo "ngrok=${ngrok_status:-not-created}"
+      if [ "$ngrok_status" = running ] &&
+          docker logs llm-ngrok 2>&1 | grep -q "started tunnel"; then
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "ERROR: ngrok tunnel did not become ready within 2 minutes" >&2
+    docker logs --tail 30 llm-ngrok >&2 || true
+    exit 1
+  '
+fi
 scripts/vm-run.sh scripts/vm-status.sh
 scripts/vm-run.sh scripts/smoke-test.sh
 deployment_in_progress=0
