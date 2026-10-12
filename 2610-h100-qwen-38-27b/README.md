@@ -58,7 +58,7 @@ infra/spot-regions.sh southeastasia uksouth germanywestcentral   # eviction rate
 # in .env and creates a region-locked ingestion identity.
 LOCATION=southeastasia infra/provision-monitoring.sh
 
-LOCATION=southeastasia ZONE=2 IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+LOCATION=southeastasia IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
 scripts/vm-run.sh scripts/bootstrap-host.sh   # data disk, NVIDIA driver, Docker, container toolkit (~4 min)
 scripts/deploy.sh up                          # copy this folder to the VM and start the stack (~20 min first time)
 scripts/vm-run.sh scripts/vm-status.sh        # containers, model download, GPU memory
@@ -71,8 +71,10 @@ finds tagged stack VMs in that region and attaches the identity. It is safe to
 rerun: existing resources, role assignments and identity attachments are
 reused.
 
-If Azure returns `OverconstrainedZonalAllocationRequest`, retry without the
-availability-zone constraint:
+Provisioning defaults to regional placement without an availability-zone
+constraint. To require a specific zone, set `ZONE=1`, `ZONE=2`, or `ZONE=3`.
+If Azure returns `OverconstrainedZonalAllocationRequest`, retry with regional
+placement:
 
 ```bash
 LOCATION=southeastasia ZONE=none IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh

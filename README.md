@@ -145,7 +145,7 @@ Run these commands from the demo directory:
 cd 2610-h100-qwen-38-27b
 cp .env.example .env
 LOCATION=southeastasia infra/provision-monitoring.sh
-LOCATION=southeastasia ZONE=2 \
+LOCATION=southeastasia \
   IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
 scripts/vm-run.sh scripts/bootstrap-host.sh
 scripts/deploy.sh up
