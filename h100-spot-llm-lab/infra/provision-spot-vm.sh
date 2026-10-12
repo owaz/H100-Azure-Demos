@@ -159,11 +159,30 @@ region_short() {
   esac
 }
 if [ -z "${VM_NAME:-}" ]; then
+  existing_vm_names=""
+  if ! resource_group_exists="$(az group exists -n "$RESOURCE_GROUP" -o tsv)"; then
+    echo "==> Aborting: unable to check resource group ${RESOURCE_GROUP}" >&2
+    exit 1
+  fi
+  if [ "$resource_group_exists" = true ]; then
+    if ! existing_vm_names="$(az vm list -g "$RESOURCE_GROUP" --query '[].name' -o tsv)"; then
+      echo "==> Aborting: unable to list existing VMs in ${RESOURCE_GROUP}" >&2
+      exit 1
+    fi
+    existing_vm_names="${existing_vm_names//$'\r'/}"
+  fi
   vm_sequence=1
   while :; do
     printf -v vm_sequence_suffix '%02d' "$vm_sequence"
     candidate_vm_name="vm-h100-$(region_short "$LOCATION")-${vm_sequence_suffix}"
-    if ! az vm show -g "$RESOURCE_GROUP" -n "$candidate_vm_name" -o none 2>/dev/null; then
+    candidate_exists=0
+    while IFS= read -r existing_vm_name; do
+      if [ "$existing_vm_name" = "$candidate_vm_name" ]; then
+        candidate_exists=1
+        break
+      fi
+    done <<< "$existing_vm_names"
+    if [ "$candidate_exists" = 0 ]; then
       VM_NAME="$candidate_vm_name"
       break
     fi
