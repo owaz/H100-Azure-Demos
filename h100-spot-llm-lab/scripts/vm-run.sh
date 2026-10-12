@@ -32,19 +32,36 @@ else
 fi
 
 # Azure reports whether the Run Command extension ran, not whether the guest
-# script succeeded. Wrap the script and recover its real exit status from a
-# sentinel in the extension output.
+# script succeeded. Run the payload as a child script so its use of $0 cannot
+# alter this wrapper, then recover its real exit status from a sentinel.
 WRAPPED_SCRIPT="$(mktemp)"
 trap 'rm -f "$WRAPPED_SCRIPT"' EXIT
+DELIMITER="__VM_RUN_GUEST_SCRIPT_EOF__"
+while { [ -n "$FILE" ] && grep -Fxq "$DELIMITER" "$FILE"; } ||
+    { [ -z "$FILE" ] && printf '%s\n' "$SCRIPT" | grep -Fxq "$DELIMITER"; }; do
+  DELIMITER="${DELIMITER}_"
+done
 {
-  printf '%s\n' '#!/usr/bin/env bash' 'set +e' '('
+  printf '%s\n' '#!/usr/bin/env bash' 'set +e'
+  printf '%s\n' 'vm_run_child="$(mktemp)"'
+  printf '%s\n' 'cleanup_vm_run_child() {'
+  printf '%s\n' '  truncate -s 0 "$vm_run_child" 2>/dev/null || true'
+  printf '%s\n' '  rm -f "$vm_run_child"'
+  printf '%s\n' '}'
+  printf '%s\n' 'trap cleanup_vm_run_child EXIT'
+  printf "cat > \"\$vm_run_child\" <<'%s'\n" "$DELIMITER"
+  printf '%s\n' '#!/usr/bin/env bash'
   if [ -n "$FILE" ]; then
     cat "$FILE"
   else
     printf '%s\n' "$SCRIPT"
   fi
-  printf '%s\n' ')' 'vm_run_rc=$?'
+  printf '%s\n' "$DELIMITER"
+  printf '%s\n' 'chmod 700 "$vm_run_child"'
+  printf '%s\n' '"$vm_run_child"' 'vm_run_rc=$?'
+  printf '%s\n' 'cleanup_vm_run_child' 'trap - EXIT'
   printf '%s\n' "printf '\n__VM_RUN_EXIT_CODE__=%s\n' \"\$vm_run_rc\""
+  printf '%s\n' 'truncate -s 0 "$0" 2>/dev/null || true'
   printf '%s\n' 'exit "$vm_run_rc"'
 } > "$WRAPPED_SCRIPT"
 
