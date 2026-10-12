@@ -1,6 +1,9 @@
 #!/bin/bash
 # Compact stack status, run on the VM:  scripts/vm-run.sh scripts/vm-status.sh
-cd /opt/llm-self-hosting 2>/dev/null || exit 0
+cd /opt/llm-self-hosting || {
+  echo "ERROR: deployment directory /opt/llm-self-hosting does not exist" >&2
+  exit 1
+}
 echo "compose-up unit: $(systemctl is-active llm-compose-up 2>/dev/null)"
 echo "models on disk: $(du -sh /data/models 2>/dev/null | cut -f1)"
 docker ps -a --format '{{.Names}}: {{.Status}}'

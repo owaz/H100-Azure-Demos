@@ -155,5 +155,6 @@ grep -Fq "model services stopped; stack files are synced without a selected mode
   "${tmp_dir}/remote-script"
 
 bash tests/test-resource-group.sh
+bash tests/test-vm-run.sh
 
 echo "model catalog tests: PASS"

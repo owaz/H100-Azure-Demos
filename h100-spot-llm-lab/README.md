@@ -120,6 +120,10 @@ scripts/vm-run.sh scripts/vm-status.sh        # containers, model download, GPU 
 scripts/vm-run.sh scripts/smoke-test.sh       # health, chat, declared capabilities, decode speed
 ```
 
+`vm-run.sh` propagates the guest script's exit status instead of Azure Run
+Command's extension status. The interactive launcher reports completion only
+after the model, gateway, and any selected ngrok tunnel are ready.
+
 When monitoring is skipped, `deploy.sh up` detects the placeholder telemetry
 values and starts only `compose.yaml`. You can also make that choice explicit:
 
