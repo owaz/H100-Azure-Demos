@@ -12,7 +12,7 @@ This repository turns that low-priority GPU approach into an end-to-end Azure de
 - **Pay for experiments, not idle time**: stop or deallocate the VM between sessions and keep the downloaded model on a persistent data disk.
 - **Plan for interruption**: Spot VMs can be evicted at any time and capacity is not guaranteed. Use regular Azure capacity for production workloads that require predictable availability.
 
-The complete deployment is in [`2610-h100-qwen-38-27b/`](2610-h100-qwen-38-27b/), with the step-by-step runbook in its [`README.md`](2610-h100-qwen-38-27b/README.md).
+The complete deployment is in [`h100-spot-llm-lab/`](h100-spot-llm-lab/), with the step-by-step runbook in its [`README.md`](h100-spot-llm-lab/README.md).
 
 ## Fork information
 
@@ -22,7 +22,7 @@ This fork focuses on a reusable H100 deployment with Azure-native monitoring.
 
 ## What this repository does
 
-The current demo lives in [`2610-h100-qwen-38-27b/`](2610-h100-qwen-38-27b/). It automates the path from an empty Azure resource group to an observable large language model endpoint.
+The current demo lives in [`h100-spot-llm-lab/`](h100-spot-llm-lab/). It automates the path from an empty Azure resource group to an observable large language model endpoint.
 
 The demo includes:
 
@@ -65,7 +65,7 @@ Host logs ------------+
                               Grafana dashboard
 ```
 
-[`compose.yaml`](2610-h100-qwen-38-27b/compose.yaml) defines model download, vLLM, and LiteLLM. [`compose.observability.yaml`](2610-h100-qwen-38-27b/compose.observability.yaml) adds the OpenTelemetry Collector and NVIDIA Data Center GPU Manager (DCGM) exporter. [`compose.ngrok.yaml`](2610-h100-qwen-38-27b/compose.ngrok.yaml) adds the optional public tunnel.
+[`compose.yaml`](h100-spot-llm-lab/compose.yaml) defines model download, vLLM, and LiteLLM. [`compose.observability.yaml`](h100-spot-llm-lab/compose.observability.yaml) adds the OpenTelemetry Collector and NVIDIA Data Center GPU Manager (DCGM) exporter. [`compose.ngrok.yaml`](h100-spot-llm-lab/compose.ngrok.yaml) adds the optional public tunnel.
 
 Every service binds to localhost on the VM. Azure Network Security Group rules deny inbound internet traffic, and a Network Address Translation (NAT) gateway handles outbound traffic.
 
@@ -87,15 +87,15 @@ LiteLLM publishes the model as `local-llm`. Clients can use the OpenAI chat comp
 
 ## Azure infrastructure
 
-[`infra/provision-spot-vm.sh`](2610-h100-qwen-38-27b/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities.
+[`infra/provision-spot-vm.sh`](h100-spot-llm-lab/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities.
 
-The VM uses Azure Spot capacity by default. For new VMs, the provisioner offers the one-GPU NC40 and two-GPU NC80 sizes; `VM_SIZE` provides the same choice for non-interactive runs. [`infra/spot-regions.sh`](2610-h100-qwen-38-27b/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment and accepts `SKU` to select the size to inspect. You can remove the Spot flags when you need regular capacity and have the required quota.
+The VM uses Azure Spot capacity by default. For new VMs, the provisioner offers the one-GPU NC40 and two-GPU NC80 sizes; `VM_SIZE` provides the same choice for non-interactive runs. [`infra/spot-regions.sh`](h100-spot-llm-lab/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment and accepts `SKU` to select the size to inspect. You can remove the Spot flags when you need regular capacity and have the required quota.
 
 The scripts support zonal and regional placement. Regional placement gives the Azure allocator more options when H100 capacity is scarce.
 
 ## Monitoring and telemetry
 
-[`infra/provision-monitoring.sh`](2610-h100-qwen-38-27b/infra/provision-monitoring.sh) creates the Azure monitoring destination. It uses [`infra/monitoring-otlp.json`](2610-h100-qwen-38-27b/infra/monitoring-otlp.json) to deploy:
+[`infra/provision-monitoring.sh`](h100-spot-llm-lab/infra/provision-monitoring.sh) creates the Azure monitoring destination. It uses [`infra/monitoring-otlp.json`](h100-spot-llm-lab/infra/monitoring-otlp.json) to deploy:
 
 - A Log Analytics workspace for traces and logs
 - A workspace-based Application Insights resource
@@ -111,7 +111,7 @@ The OpenTelemetry Collector authenticates with the managed identity. No monitori
 
 ### Collected signals
 
-[`observability/otelcol/config.yaml`](2610-h100-qwen-38-27b/observability/otelcol/config.yaml) defines one pipeline for each OpenTelemetry signal:
+[`observability/otelcol/config.yaml`](h100-spot-llm-lab/observability/otelcol/config.yaml) defines one pipeline for each OpenTelemetry signal:
 
 - **Traces**: LiteLLM generative artificial intelligence spans received over OpenTelemetry Protocol (OTLP)
 - **Model metrics**: vLLM request, token, cache, scheduler, and latency measurements
@@ -128,9 +128,9 @@ The collector filters routine health checks, metric scrapes, empty lines, and Do
 
 ## Grafana dashboard
 
-[`observability/grafana/h100-llm.json`](2610-h100-qwen-38-27b/observability/grafana/h100-llm.json) is ready to import into Grafana. [`observability/grafana/build_dashboard.py`](2610-h100-qwen-38-27b/observability/grafana/build_dashboard.py) generates the JSON source.
+[`observability/grafana/h100-llm.json`](h100-spot-llm-lab/observability/grafana/h100-llm.json) is ready to import into Grafana. [`observability/grafana/build_dashboard.py`](h100-spot-llm-lab/observability/grafana/build_dashboard.py) generates the JSON source.
 
-![Grafana dashboard showing H100 model throughput, token rates, cache use, and concurrent requests](2610-h100-qwen-38-27b/observability/grafana/h100-llm-dashboard.png)
+![Grafana dashboard showing H100 model throughput, token rates, cache use, and concurrent requests](h100-spot-llm-lab/observability/grafana/h100-llm-dashboard.png)
 
 The dashboard contains these sections:
 
@@ -156,7 +156,7 @@ Install the Azure Command-Line Interface (CLI) and `jq`, then authenticate with 
 Run these commands from the demo directory:
 
 ```bash
-cd 2610-h100-qwen-38-27b
+cd h100-spot-llm-lab
 cp .env.example .env
 LOCATION=southeastasia infra/provision-monitoring.sh
 LOCATION=southeastasia \
@@ -168,7 +168,7 @@ scripts/vm-run.sh scripts/smoke-test.sh
 
 The first deployment downloads the model and can take about 20 minutes. Set both `NGROK_AUTHTOKEN` and `NGROK_URL` in `.env` to enable ngrok. Leave both values empty to keep the gateway private.
 
-Read the [complete deployment guide](2610-h100-qwen-38-27b/README.md) for region selection, monitoring options, dashboard import, troubleshooting, and cleanup.
+Read the [complete deployment guide](h100-spot-llm-lab/README.md) for region selection, monitoring options, dashboard import, troubleshooting, and cleanup.
 
 ## Operate and benchmark the stack
 
@@ -211,7 +211,7 @@ The Grafana token economics panels compare estimated token revenue with the conf
 ## Repository layout
 
 ```text
-2610-h100-qwen-38-27b/
+h100-spot-llm-lab/
 ├── compose.yaml                 Core model and gateway services
 ├── compose.observability.yaml   Collector and GPU monitoring
 ├── compose.ngrok.yaml           Optional public endpoint
