@@ -127,6 +127,7 @@ elif [ "$1 $2 $3" = "vm run-command invoke" ]; then
   while [ "$#" -gt 0 ]; do
     if [ "$1" = "--scripts" ]; then
       cp "${2#@}" "$CAPTURED_REMOTE_SCRIPT"
+      wc -c < "${2#@}" >> "$REMOTE_SCRIPT_SIZES"
       break
     fi
     shift
@@ -141,6 +142,7 @@ chmod +x "${tmp_dir}/az"
 
 PATH="${tmp_dir}:${PATH}" \
 CAPTURED_REMOTE_SCRIPT="${tmp_dir}/remote-script" \
+REMOTE_SCRIPT_SIZES="${tmp_dir}/remote-script-sizes" \
 SUBSCRIPTION=sub-test \
 RESOURCE_GROUP=rg-test \
 VM_NAME=vm-test \
@@ -153,6 +155,10 @@ grep -Fq "docker rm -f llm-model-download llm-model llm-litellm llm-ngrok" \
   "${tmp_dir}/remote-script"
 grep -Fq "model services stopped; stack files are synced without a selected model" \
   "${tmp_dir}/remote-script"
+grep -Fq "base64 -d < '/root/.cache/llm-self-hosting/deploy-payload.b64'" \
+  "${tmp_dir}/remote-script"
+[ "$(wc -l < "${tmp_dir}/remote-script-sizes" | tr -d ' ')" -gt 2 ]
+[ "$(sort -nr "${tmp_dir}/remote-script-sizes" | head -n 1 | tr -d ' ')" -lt 140000 ]
 
 bash tests/test-resource-group.sh
 bash tests/test-vm-run.sh

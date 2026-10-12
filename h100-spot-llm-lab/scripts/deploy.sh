@@ -44,8 +44,10 @@ REMOTE_DIR="/opt/llm-self-hosting"
 COMPOSE_FILES_B64="$(printf '%s' "${COMPOSE_FILES:-}" | base64 -w0)"
 
 PAYLOAD="$(git ls-files -z --cached --others --exclude-standard \
-  | tar --null -T - -czf - | base64 -w0)"
+  | COPYFILE_DISABLE=1 tar --null -T - -czf - | base64 -w0)"
 echo "payload: $(( ${#PAYLOAD} / 1024 )) KiB (base64)"
+PAYLOAD_CHUNK_SIZE=$((128 * 1024))
+REMOTE_PAYLOAD_FILE="/root/.cache/llm-self-hosting/deploy-payload.b64"
 
 # Resolve the VM once here; scripts/vm-run.sh uses RESOURCE_GROUP + VM_NAME.
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"   # default: the az CLI's current subscription
@@ -158,11 +160,26 @@ if [ -n "$ENV_LINES" ]; then
   echo "env keys sent: $(printf '%s\n' "$ENV_LINES" | cut -d= -f1 | tr '\n' ' ')"
 fi
 
+payload_chunks=$(((${#PAYLOAD} + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE))
+echo "staging payload in ${payload_chunks} Run Command chunk(s)"
+scripts/vm-run.sh -c "install -d -m 700 '${REMOTE_PAYLOAD_FILE%/*}'; : > '$REMOTE_PAYLOAD_FILE'; chmod 600 '$REMOTE_PAYLOAD_FILE'"
+for ((offset = 0; offset < ${#PAYLOAD}; offset += PAYLOAD_CHUNK_SIZE)); do
+  chunk="${PAYLOAD:offset:PAYLOAD_CHUNK_SIZE}"
+  scripts/vm-run.sh -c "printf '%s' '$chunk' >> '$REMOTE_PAYLOAD_FILE'"
+done
+unset PAYLOAD chunk
+
 REMOTE_SCRIPT="$(cat <<EOF
 #!/bin/bash
 set -euo pipefail
+cleanup_payload() {
+  rm -f '$REMOTE_PAYLOAD_FILE'
+}
+trap cleanup_payload EXIT
 mkdir -p $REMOTE_DIR && cd $REMOTE_DIR
-echo '$PAYLOAD' | base64 -d | tar -xzf - --no-same-owner
+base64 -d < '$REMOTE_PAYLOAD_FILE' | tar -xzf - --no-same-owner
+cleanup_payload
+trap - EXIT
 echo '$ENV_B64' | base64 -d | bash scripts/merge-env.sh
 sed -i \
   -e '/^MODEL_REPO=/d' \
