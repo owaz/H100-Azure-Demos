@@ -7,8 +7,9 @@
 #   scripts/deploy.sh up       # sync, then `docker compose up -d` in the background
 #   COMPOSE_FILES="-f compose.yaml" scripts/deploy.sh up   # model + gateway only
 #
-# By default `up` starts the full stack: compose.yaml plus the telemetry
-# (compose.observability.yaml) and ngrok (compose.ngrok.yaml) overlays.
+# By default `up` starts compose.yaml plus the telemetry overlay. The ngrok
+# overlay is added automatically when both NGROK_AUTHTOKEN and NGROK_URL are
+# set in .env. COMPOSE_FILES overrides the automatic selection.
 #
 # Tracked and untracked-but-not-ignored files are sent as the payload.
 # Secrets: put them in this machine's .env (gitignored; same keys as
@@ -28,7 +29,7 @@ cd "$(dirname "$0")/.."
 ACTION="${1:-sync}"
 case "$ACTION" in sync|up) ;; *) echo "usage: deploy.sh [sync|up]" >&2; exit 2 ;; esac
 REMOTE_DIR="/opt/llm-self-hosting"
-COMPOSE_FILES="${COMPOSE_FILES:--f compose.yaml -f compose.observability.yaml -f compose.ngrok.yaml}"
+COMPOSE_FILES_B64="$(printf '%s' "${COMPOSE_FILES:-}" | base64 -w0)"
 
 PAYLOAD="$(git ls-files -z --cached --others --exclude-standard \
   | tar --null -T - -czf - | base64 -w0)"
@@ -49,6 +50,17 @@ export SUBSCRIPTION RG VM_NAME
 ENV_LINES=""
 if [ -f .env ]; then
   ENV_LINES="$(tr -d '\r' < .env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.+' || true)"
+fi
+NGROK_MODE=disabled
+if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
+  NGROK_AUTHTOKEN_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_AUTHTOKEN=//p' | tail -n 1)"
+  NGROK_URL_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_URL=//p' | tail -n 1)"
+  if [ -n "$NGROK_AUTHTOKEN_VALUE" ] && [ -n "$NGROK_URL_VALUE" ]; then
+    NGROK_MODE=enabled
+  elif [ -n "$NGROK_AUTHTOKEN_VALUE" ] || [ -n "$NGROK_URL_VALUE" ]; then
+    echo "ERROR: ngrok is partially configured; set both NGROK_AUTHTOKEN and NGROK_URL in .env, or leave both empty" >&2
+    exit 2
+  fi
 fi
 
 # The ingestion identity attached to the VM decides the collector's client ID.
@@ -79,20 +91,38 @@ echo '$ENV_B64' | base64 -d | bash scripts/merge-env.sh
 mkdir -p /data/models /data/vllm-cache
 echo "synced to $REMOTE_DIR"
 if [ "$ACTION" = "up" ]; then
+  compose_files="\$(echo '$COMPOSE_FILES_B64' | base64 -d)"
+  if [ -n "\$compose_files" ]; then
+    read -r -a compose_args <<< "\$compose_files"
+    echo "compose files: \$compose_files (explicit override)"
+  else
+    compose_args=(-f compose.yaml -f compose.observability.yaml)
+    if [ "$NGROK_MODE" = enabled ]; then
+      compose_args+=(-f compose.ngrok.yaml)
+      echo "ngrok enabled"
+    else
+      echo "ngrok disabled: both NGROK_AUTHTOKEN and NGROK_URL must be set in the workstation .env"
+      docker rm -f llm-ngrok >/dev/null 2>&1 || true
+    fi
+    printf 'compose files:'
+    printf ' %s' "\${compose_args[@]}"
+    printf '\n'
+  fi
   # Detach through systemd: image pulls and the model download can take far
   # longer than run-command allows. Progress: /var/log/llm-compose-up.log
   # On a fresh VM compose once declared the model unhealthy during its first
-  # load and gave up, leaving the gateway and ngrok created but never started,
+  # load and gave up, leaving dependent services created but never started,
   # although the model went healthy minutes later. A second up waits for it
   # and starts them, so retry up to twice.
   systemctl reset-failed llm-compose-up 2>/dev/null || true
   systemd-run --unit=llm-compose-up --collect --working-directory=$REMOTE_DIR \
-    bash -c "up() { docker compose $COMPOSE_FILES up -d >> /var/log/llm-compose-up.log 2>&1; }; \
-      up || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up; } \
-         || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up; }"
+    bash -c "up() { docker compose \"\\\$@\" up -d >> /var/log/llm-compose-up.log 2>&1; }; \
+      up \"\\\$@\" || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up \"\\\$@\"; } \
+                    || { echo '== compose up failed; retrying in 60 s' >> /var/log/llm-compose-up.log; sleep 60; up \"\\\$@\"; }" \
+    _ "\${compose_args[@]}"
   echo "started llm-compose-up; follow with: scripts/vm-run.sh -c 'tail -n 30 /var/log/llm-compose-up.log'"
 fi
-# This script may carry secrets; don't leave it in the waagent download dir.
+# This script may carry secrets; do not leave it in the waagent download dir.
 # (\$0 is escaped so it expands on the VM, not in this heredoc.)
 truncate -s 0 "\$0" 2>/dev/null || true
 EOF

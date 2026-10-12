@@ -2,13 +2,13 @@
 # Shared helper, sourced by infra/provision-spot-vm.sh and scripts/vm-run.sh.
 #
 # Every stack VM is tagged project=llm-self-hosting role=llm-h100, and its
-# resource group and VM names carry the region, zone and a creation-date
-# suffix (yymmdd), e.g. rg-llm-h100-uksouth-z2-261005 /
+# resource group and VM names carry the region, placement (zone or regional)
+# and a creation-date suffix (yymmdd), e.g. rg-llm-h100-uksouth-z2-261005 /
 # vm-llm-h100-uks-z2-261005 (the VM name with a short region code).
 #
 # find_stack_vm: sets FOUND_RG, FOUND_VM, FOUND_LOCATION for the most recently
 # created tagged VM in $SUBSCRIPTION (by timeCreated: two VMs made the same day
-# in the same zone share a VM name).
+# with the same placement share a VM name).
 #   returns 0 = found, 1 = none exists, 2 = the lookup itself failed
 # Callers must not treat 2 as "none": that would create a duplicate VM.
 # Warns when more than one is found.

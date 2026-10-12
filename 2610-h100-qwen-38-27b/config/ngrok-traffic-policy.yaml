@@ -4,7 +4,7 @@
 # public IPs of the clients that may call the model.
 on_http_request:
   - expressions:
-      - "conn.client_ip != '203.0.113.10' && conn.client_ip != '198.51.100.20'"
+      - "conn.client_ip != '203.0.113.10' && conn.client_ip != '198.51.100.20' && conn.client_ip != '92.96.113.150' && conn.client_ip != '2001:8f8:1621:c5ab:c461:60e6:7910:d34a'"
     actions:
       - type: custom-response
         config:

@@ -14,6 +14,9 @@
 #   ID_RG=rg-llm-telemetry DCR_ID=/subscriptions/.../dataCollectionRules/... \
 #     REGIONS="southeastasia uksouth" infra/telemetry-identities.sh
 #
+# Normally infra/provision-monitoring.sh calls this helper after provisioning
+# the workspaces, Application Insights resource, DCE and DCR.
+#
 # Then provision with IDENTITY_RG=rg-llm-telemetry so infra/provision-spot-vm.sh
 # attaches id-llm-ingest-<region>. Idempotent: existing identities and role
 # assignments are reused or updated.

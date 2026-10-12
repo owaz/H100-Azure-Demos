@@ -15,12 +15,14 @@
 # Reuse first: the script looks for an existing stack VM (tags
 # project=llm-self-hosting role=llm-h100) in the subscription. If one exists,
 # it reuses it (starting it if deallocated) and creates nothing. Only if none
-# exists does it create a new resource group + VM named with the region, zone
-# and today's date, e.g. rg-llm-h100-uksouth-z2-261005 / vm-llm-h100-uks-z2-261005
-# for uksouth zone 2 on 2026-10-05. The VM name uses a short region code
-# (region_short below). Pick the region and zone with infra/spot-regions.sh.
+# exists does it create a new resource group + VM named with the region,
+# placement and today's date, e.g. rg-llm-h100-uksouth-z2-261005 /
+# vm-llm-h100-uks-z2-261005 for uksouth zone 2 on 2026-10-05. The VM name uses
+# a short region code (region_short below). Pick the region and optional zone
+# with infra/spot-regions.sh.
 #
 #   LOCATION=southeastasia ZONE=2 infra/provision-spot-vm.sh   # reuse, or create
+#   LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh # regional VM
 #   FORCE_NEW=1 LOCATION=... ZONE=... infra/provision-spot-vm.sh
 #   RG=... VM_NAME=... infra/provision-spot-vm.sh    # explicit names, no lookup
 #
@@ -35,7 +37,7 @@ export MSYS_NO_PATHCONV=1   # keep Git Bash on Windows from rewriting /subscript
 
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"   # default: the az CLI's current subscription
 LOCATION="${LOCATION:-}"
-ZONE="${ZONE:-}"
+ZONE="${ZONE:-none}"
 PREFIX="${PREFIX:-llm-h100}"
 DATE_SUFFIX="${DATE_SUFFIX:-$(date +%y%m%d)}"   # yymmdd, e.g. 261009
 FORCE_NEW="${FORCE_NEW:-0}"
@@ -69,10 +71,29 @@ if [ -z "${RG:-}" ] && [ -z "${VM_NAME:-}" ] && [ "$FORCE_NEW" != 1 ]; then
     *) echo "==> Aborting: can't tell whether a stack VM exists" >&2; exit 1 ;;
   esac
 fi
-if [ "$REUSE" != 1 ] && { [ -z "$LOCATION" ] || [ -z "$ZONE" ]; }; then
-  echo "usage: LOCATION=<region> ZONE=<1|2|3> $0   (pick them with infra/spot-regions.sh)" >&2
+if [ "$REUSE" != 1 ] && [ -z "$LOCATION" ]; then
+  echo "usage: LOCATION=<region> [ZONE=<1|2|3|none>] $0   (pick a zone with infra/spot-regions.sh, or use none for regional placement)" >&2
   exit 2
 fi
+case "$ZONE" in
+  1|2|3)
+    PLACEMENT="z${ZONE}"
+    ;;
+  none)
+    PLACEMENT="regional"
+    ;;
+  *)
+    echo "invalid ZONE '${ZONE}': expected 1, 2, 3, or none" >&2
+    exit 2
+    ;;
+esac
+az_with_placement() {
+  if [ "$ZONE" = none ]; then
+    az "$@"
+  else
+    az "$@" --zone "$ZONE"
+  fi
+}
 # Short region code for the VM name (Azure CAF abbreviations); a region not
 # listed here keeps its full name.
 region_short() {
@@ -92,8 +113,8 @@ region_short() {
     *) echo "$1" ;;
   esac
 }
-RG="${RG:-rg-${PREFIX}-${LOCATION}-z${ZONE}-${DATE_SUFFIX}}"
-VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-z${ZONE}-${DATE_SUFFIX}}"
+RG="${RG:-rg-${PREFIX}-${LOCATION}-${PLACEMENT}-${DATE_SUFFIX}}"
+VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}}"
 
 # Regional OTLP ingestion identity from infra/telemetry-identities.sh. Each one
 # has isolationScope=Regional (usable only in its own region), so the name
@@ -122,10 +143,10 @@ echo "==> NSG ${NSG} (default rules only: deny inbound from the internet)"
 az network nsg create -g "$RG" -n "$NSG" -l "$LOCATION" --tags "${TAGS[@]}" -o none
 
 echo "==> NAT gateway ${NAT} for outbound-only internet access"
-az network public-ip create -g "$RG" -n "$NAT_PIP" -l "$LOCATION" \
-  --sku Standard --allocation-method Static --zone "$ZONE" --tags "${TAGS[@]}" -o none
-az network nat gateway create -g "$RG" -n "$NAT" -l "$LOCATION" \
-  --public-ip-addresses "$NAT_PIP" --idle-timeout 10 --zone "$ZONE" \
+az_with_placement network public-ip create -g "$RG" -n "$NAT_PIP" -l "$LOCATION" \
+  --sku Standard --allocation-method Static --tags "${TAGS[@]}" -o none
+az_with_placement network nat gateway create -g "$RG" -n "$NAT" -l "$LOCATION" \
+  --public-ip-addresses "$NAT_PIP" --idle-timeout 10 \
   --tags "${TAGS[@]}" -o none
 
 echo "==> VNet ${VNET} / subnet ${SUBNET}"
@@ -146,12 +167,12 @@ fi
 if az vm show -g "$RG" -n "$VM_NAME" -o none 2>/dev/null; then
   echo "==> VM ${VM_NAME} already exists; skipping create"
 else
-  echo "==> Spot VM ${VM_NAME} (${VM_SIZE}, zone ${ZONE}), no public IP"
+  echo "==> Spot VM ${VM_NAME} (${VM_SIZE}, ${PLACEMENT}), no public IP"
   # Trusted Launch with Secure Boot off: Secure Boot rejects unsigned
   # out-of-tree NVIDIA kernel modules. Security type "Standard" needs the
   # Microsoft.Compute/UseStandardSecurityType feature registered on the
   # subscription.
-  az vm create -g "$RG" -n "$VM_NAME" -l "$LOCATION" --zone "$ZONE" \
+  az_with_placement vm create -g "$RG" -n "$VM_NAME" -l "$LOCATION" \
     --size "$VM_SIZE" --image "$IMAGE" \
     --security-type TrustedLaunch --enable-secure-boot false --enable-vtpm true \
     --priority Spot --eviction-policy Deallocate --max-price -1 \

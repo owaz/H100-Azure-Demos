@@ -37,23 +37,26 @@ the `--priority Spot` flags in `infra/provision-spot-vm.sh`.
 
 ## Prerequisites
 
-- Azure CLI, logged in (`az login`), in Bash (Linux, macOS, WSL or Git Bash on Windows).
+- Azure CLI and `jq`, logged in (`az login`), in Bash (Linux, macOS, WSL or Git Bash on Windows).
 - At least 40 low-priority (Spot) vCPUs of quota in the region you pick.
-- An [ngrok](https://ngrok.com) account with an authtoken and a reserved domain, for the public URL.
-  Optional: deploy with `COMPOSE_FILES="-f compose.yaml -f compose.observability.yaml"` to skip it.
-- For telemetry: an Application Insights resource with OTLP ingestion, its data collection rule, and an
-  Azure Monitor workspace. Optional: deploy with `COMPOSE_FILES="-f compose.yaml"` to skip it.
+- Optional: an [ngrok](https://ngrok.com) account with an authtoken and a reserved domain for a public URL.
+  The deployment enables ngrok only when both `NGROK_AUTHTOKEN` and `NGROK_URL` are set in the
+  workstation `.env`.
+- For telemetry provisioning, permission to create resources and role assignments in the subscription
+  (Owner, or Contributor plus User Access Administrator). To skip telemetry, deploy with
+  `COMPOSE_FILES="-f compose.yaml"`.
 
 ## Run it
 
 ```bash
-cp .env.example .env            # fill in NGROK_*, the AZMON_* endpoints and AZMON_APPLICATION_ID
-# edit config/ngrok-traffic-policy.yaml: the client IPs allowed to call the model
+cp .env.example .env            # optionally fill in both NGROK_* values
+# when using ngrok, edit config/ngrok-traffic-policy.yaml with the allowed client IPs
 
 infra/spot-regions.sh southeastasia uksouth germanywestcentral   # eviction rate, price, placement score
 
-# Optional, once per region: a region-locked identity that may publish telemetry
-ID_RG=rg-llm-telemetry DCR_ID=<dcr-resource-id> REGIONS=southeastasia infra/telemetry-identities.sh
+# Recommended: create monitoring first. This fills the five telemetry values
+# in .env and creates a region-locked ingestion identity.
+LOCATION=southeastasia infra/provision-monitoring.sh
 
 LOCATION=southeastasia ZONE=2 IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
 scripts/vm-run.sh scripts/bootstrap-host.sh   # data disk, NVIDIA driver, Docker, container toolkit (~4 min)
@@ -62,7 +65,29 @@ scripts/vm-run.sh scripts/vm-status.sh        # containers, model download, GPU 
 scripts/vm-run.sh scripts/smoke-test.sh       # health, chat, tool call, single-stream decode speed
 ```
 
-Then call the model through the ngrok URL from an allow-listed client:
+The reverse order also works: provision the VM without `IDENTITY_RG`, then run
+`LOCATION=<vm-region> infra/provision-monitoring.sh`. The monitoring script
+finds tagged stack VMs in that region and attaches the identity. It is safe to
+rerun: existing resources, role assignments and identity attachments are
+reused.
+
+If Azure returns `OverconstrainedZonalAllocationRequest`, retry without the
+availability-zone constraint:
+
+```bash
+LOCATION=southeastasia ZONE=none IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+```
+
+`ZONE=none` creates a regional VM and omits the zone from the VM, NAT gateway,
+and NAT public IP. It improves the allocator's options but does not guarantee
+scarce H100 Spot capacity. If regional placement also fails, try another region
+reported by `infra/spot-regions.sh`, or use regular capacity after obtaining
+`Standard NCadsH100v5 Family` quota. A failed attempt's resource group is not
+reused because it contains no tagged stack VM; delete it separately when it is
+no longer needed.
+
+When both ngrok values are configured, call the model through its URL from an
+allow-listed client:
 
 ```bash
 curl https://<your-domain>.ngrok-free.dev/v1/chat/completions -H 'Content-Type: application/json' \
@@ -81,6 +106,54 @@ az group delete -n <resource-group> --yes     # remove everything
 
 `deploy.sh` sends the files of this folder plus the non-empty lines of your local `.env`, and
 `scripts/merge-env.sh` merges them into `/opt/llm-self-hosting/.env` on the VM.
+By default it starts the core and observability Compose files, adding
+`compose.ngrok.yaml` only when both ngrok values are non-empty in the
+workstation `.env`. Removing both values disables ngrok on the next deployment;
+a partial configuration fails before syncing. Set
+`COMPOSE_FILES` to override this automatic selection.
+
+## Monitoring provisioning
+
+[`infra/provision-monitoring.sh`](infra/provision-monitoring.sh) creates or
+reuses the complete Azure destination required by
+[`compose.observability.yaml`](compose.observability.yaml):
+
+- a Log Analytics workspace for OTLP traces and logs;
+- a workspace-based Application Insights resource for application views and KQL;
+- an Azure Monitor workspace for OTLP/Prometheus metrics;
+- a public Data Collection Endpoint (DCE) and a Data Collection Rule (DCR)
+  that route each signal to the correct workspace;
+- a region-isolated user-assigned identity with **Monitoring Metrics Publisher**
+  on the DCR; and
+- an identity attachment to every tagged stack VM in the selected region.
+
+The script uses the checked-in
+[`infra/monitoring-otlp.json`](infra/monitoring-otlp.json) template, derives the
+DCR immutable ID and DCE domains from Azure, and replaces only the five
+telemetry keys in the ignored workstation `.env`. It also prints those values
+for CI or copy/paste use. Common options:
+
+```bash
+LOCATION=southeastasia infra/provision-monitoring.sh
+LOCATION=southeastasia WRITE_ENV=0 infra/provision-monitoring.sh  # print only
+LOCATION=southeastasia ATTACH_VMS=0 infra/provision-monitoring.sh # don't attach VMs
+```
+
+Resource names can be overridden with `MONITORING_RG`, `LAW_NAME`, `AMW_NAME`,
+`APP_INSIGHTS_NAME`, `DCE_NAME` and `DCR_NAME`. All resources must be in the
+same region. The script registers required Azure resource providers when the
+caller has permission.
+
+To remove monitoring, first stop using its identity, then delete its resource
+group:
+
+```bash
+az group delete -n rg-llm-telemetry --yes
+```
+
+The lower-level [`infra/telemetry-identities.sh`](infra/telemetry-identities.sh)
+remains available for adding identities in more regions to an existing DCR,
+but normal deployments should use `provision-monitoring.sh`.
 
 ## What we measured
 
@@ -107,6 +180,16 @@ generated by `build_dashboard.py`. To import it into Grafana, for example Azure 
 
 If your Azure Monitor workspace data source uses the Azure Monitor Managed Service for Prometheus plugin
 (Grafana 13 and later), change the `datasource` variable's type to that plugin.
+
+The monitoring provisioner does not create Azure Managed Grafana. Grafana is
+optional: the collector and Azure resources ingest data without it. The files
+under `observability/` align with the provisioned resources as follows:
+
+- `otelcol/config.yaml` authenticates with the regional managed identity and
+  exports traces, logs and metrics to the three generated OTLP URLs.
+- `dcgm/counters.csv` selects the H100 GPU metrics scraped by `dcgm-exporter`.
+- `grafana/h100-llm.json` and `build_dashboard.py` visualize metrics from the
+  Azure Monitor workspace and traces/logs from Application Insights.
 
 The **Token economics** row compares what the
 tokens served would sell for, at the price variables at the top of the dashboard, with the VM price per

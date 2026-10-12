@@ -1,7 +1,8 @@
 # Telemetry overlay: every signal to Application Insights over OTLP, through
 # an OpenTelemetry Collector. Use together with compose.yaml:
 #   scripts/deploy.sh up   (included by default)
-# Endpoints and the identity's client ID are in .env (not secrets).
+# infra/provision-monitoring.sh creates the Azure resources and fills the
+# endpoints and identity client ID in .env (none of them are secrets).
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1

@@ -1,5 +1,5 @@
 # Public tunnel to the LiteLLM gateway. Use together with compose.yaml:
-#   scripts/deploy.sh up   (included by default)
+#   scripts/deploy.sh up   (included when both NGROK_* values are configured)
 # NGROK_AUTHTOKEN and NGROK_URL come from .env (workstation .env is merged into
 # the VM's by deploy.sh). Access control: config/ngrok-traffic-policy.yaml.
 services:
