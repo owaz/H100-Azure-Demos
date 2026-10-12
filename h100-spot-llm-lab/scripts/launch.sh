@@ -58,6 +58,9 @@ prompt_yes_no() {
 deployment_in_progress=0
 handle_deployment_failure() {
   local status=$?
+  if [ "$#" -gt 0 ]; then
+    status="$1"
+  fi
   trap - ERR
   set +e
   if [ "$deployment_in_progress" = 1 ]; then
@@ -190,7 +193,6 @@ else
 fi
 
 if [ "$reuse_existing" = 1 ]; then
-  deployment_in_progress=1
   VM_NAME="$FOUND_VM"
   LOCATION="$FOUND_LOCATION"
   export VM_NAME LOCATION
@@ -202,6 +204,7 @@ if [ "$reuse_existing" = 1 ]; then
   }
   power_code="$(az vm get-instance-view --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
     --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv | tr -d '\r')"
+  deployment_in_progress=1
   if [ "$power_code" != PowerState/running ]; then
     echo "==> Starting ${VM_NAME}"
     az vm start --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none
@@ -219,7 +222,10 @@ else
     infra/provision-spot-vm.sh
   find_rc=0
   find_stack_vm || find_rc=$?
-  [ "$find_rc" = 0 ] || { echo "ERROR: the newly provisioned VM cannot be discovered" >&2; exit 1; }
+  if [ "$find_rc" != 0 ]; then
+    echo "ERROR: the newly provisioned VM cannot be discovered" >&2
+    handle_deployment_failure 1
+  fi
   VM_NAME="$FOUND_VM"
   LOCATION="$FOUND_LOCATION"
   export VM_NAME LOCATION

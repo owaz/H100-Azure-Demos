@@ -78,5 +78,10 @@ grep -Fq "Delete Azure resource group '" scripts/launch.sh
 grep -Fq 'az group delete --subscription "$SUBSCRIPTION" -n "$RESOURCE_GROUP" --yes --no-wait' scripts/launch.sh
 grep -Fq 'prompt_yes_no "Deploy a model now?" yes' scripts/launch.sh
 grep -Fq 'DEPLOY_MODEL=0 scripts/deploy.sh sync' scripts/launch.sh
+grep -Fq 'handle_deployment_failure 1' scripts/launch.sh
+
+power_check_line="$(grep -n 'power_code="$(az vm get-instance-view' scripts/launch.sh | cut -d: -f1)"
+cleanup_activation_line="$(grep -n 'deployment_in_progress=1' scripts/launch.sh | head -n 1 | cut -d: -f1)"
+[ "$power_check_line" -lt "$cleanup_activation_line" ]
 
 echo "resource group tests: PASS"
