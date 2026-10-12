@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Sync this repo's working tree to /opt/llm-self-hosting on the VM through
-# `az vm run-command` (the VM has no inbound path and needs no Git access),
-# then optionally start the stack.
+# Sync this repo's working tree to /opt/llm-self-hosting on the VM, then
+# optionally start the stack. The committed baseline is downloaded from
+# GitHub; local changes are overlaid through `az vm run-command`.
 #
 #   scripts/deploy.sh          # sync files only
 #   scripts/deploy.sh up       # sync, then `docker compose up -d` in the background
@@ -12,7 +12,9 @@
 # overlay is added automatically when both NGROK_AUTHTOKEN and NGROK_URL are
 # set in .env. COMPOSE_FILES overrides the automatic selection.
 #
-# Tracked and untracked-but-not-ignored files are sent as the payload.
+# The exact HEAD commit is downloaded from the public GitHub origin. Modified
+# tracked and untracked-but-not-ignored files are sent as a local overlay, with
+# bounded Run Command chunks used only when that overlay is large.
 # Secrets: put them in this machine's .env (gitignored; same keys as
 # .env.example). Only its non-empty KEY=value lines are sent, and
 # scripts/merge-env.sh merges them into the VM's .env. Keys left empty locally
@@ -42,12 +44,70 @@ if [ "$ACTION" = up ] && [ "$DEPLOY_MODEL" = 0 ]; then
 fi
 REMOTE_DIR="/opt/llm-self-hosting"
 COMPOSE_FILES_B64="$(printf '%s' "${COMPOSE_FILES:-}" | base64 -w0)"
+SOURCE_COMMIT="$(git rev-parse HEAD)"
+LAB_PATH="$(git rev-parse --show-prefix)"
+LAB_PATH="${LAB_PATH%/}"
+[ -n "$LAB_PATH" ] || {
+  echo "ERROR: deploy.sh must run from the lab directory inside its Git repository" >&2
+  exit 2
+}
+if [ -n "${DEPLOY_ARCHIVE_URL:-}" ]; then
+  ARCHIVE_URL="$DEPLOY_ARCHIVE_URL"
+  SOURCE_REPOSITORY=custom
+else
+  ORIGIN_URL="${DEPLOY_GIT_ORIGIN_URL:-$(git remote get-url origin)}"
+  case "$ORIGIN_URL" in
+    https://github.com/*|http://github.com/*)
+      SOURCE_REPOSITORY="${ORIGIN_URL#*://github.com/}"
+      ;;
+    git@github.com:*)
+      SOURCE_REPOSITORY="${ORIGIN_URL#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      SOURCE_REPOSITORY="${ORIGIN_URL#ssh://git@github.com/}"
+      ;;
+    *)
+      echo "ERROR: origin is not a supported public GitHub URL: ${ORIGIN_URL}" >&2
+      echo "Set DEPLOY_ARCHIVE_URL to an immutable public tar.gz archive URL." >&2
+      exit 2
+      ;;
+  esac
+  SOURCE_REPOSITORY="${SOURCE_REPOSITORY%.git}"
+  SOURCE_REPOSITORY="${SOURCE_REPOSITORY%/}"
+  [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    echo "ERROR: cannot determine GitHub owner/repository from origin: ${ORIGIN_URL}" >&2
+    exit 2
+  }
+  ARCHIVE_URL="https://github.com/${SOURCE_REPOSITORY}/archive/${SOURCE_COMMIT}.tar.gz"
+fi
+ARCHIVE_URL_B64="$(printf '%s' "$ARCHIVE_URL" | base64 -w0)"
+LAB_PATH_B64="$(printf '%s' "$LAB_PATH" | base64 -w0)"
+echo "source: ${SOURCE_REPOSITORY}@${SOURCE_COMMIT}"
 
-PAYLOAD="$(git ls-files -z --cached --others --exclude-standard \
-  | COPYFILE_DISABLE=1 tar --null -T - -czf - | base64 -w0)"
-echo "payload: $(( ${#PAYLOAD} / 1024 )) KiB (base64)"
-PAYLOAD_CHUNK_SIZE=$((128 * 1024))
-REMOTE_PAYLOAD_FILE="/root/.cache/llm-self-hosting/deploy-payload.b64"
+LOCAL_TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$LOCAL_TMP_DIR"' EXIT
+OVERLAY_LIST="${LOCAL_TMP_DIR}/overlay-files"
+{
+  git diff --relative --name-only -z --diff-filter=ACMRTUXB HEAD -- .
+  git ls-files -z --others --exclude-standard -- .
+} > "$OVERLAY_LIST"
+OVERLAY_B64=""
+OVERLAY_PRESENT=0
+if [ -s "$OVERLAY_LIST" ]; then
+  OVERLAY_B64="$(COPYFILE_DISABLE=1 tar --no-xattrs --null -T "$OVERLAY_LIST" -czf - | base64 -w0)"
+  OVERLAY_PRESENT=1
+fi
+DELETED_B64="$(
+  git diff --relative --name-only -z --diff-filter=D HEAD -- . | base64 -w0
+)"
+PAYLOAD_CHUNK_SIZE="${DEPLOY_PAYLOAD_CHUNK_SIZE:-$((128 * 1024))}"
+case "$PAYLOAD_CHUNK_SIZE" in
+  ''|*[!0-9]*|0)
+    echo "ERROR: DEPLOY_PAYLOAD_CHUNK_SIZE must be a positive integer" >&2
+    exit 2
+    ;;
+esac
+REMOTE_OVERLAY_FILE="/root/.cache/llm-self-hosting/deploy-overlay.b64"
 
 # Resolve the VM once here; scripts/vm-run.sh uses RESOURCE_GROUP + VM_NAME.
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"   # default: the az CLI's current subscription
@@ -160,26 +220,63 @@ if [ -n "$ENV_LINES" ]; then
   echo "env keys sent: $(printf '%s\n' "$ENV_LINES" | cut -d= -f1 | tr '\n' ' ')"
 fi
 
-payload_chunks=$(((${#PAYLOAD} + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE))
-echo "staging payload in ${payload_chunks} Run Command chunk(s)"
-scripts/vm-run.sh -c "install -d -m 700 '${REMOTE_PAYLOAD_FILE%/*}'; : > '$REMOTE_PAYLOAD_FILE'; chmod 600 '$REMOTE_PAYLOAD_FILE'"
-for ((offset = 0; offset < ${#PAYLOAD}; offset += PAYLOAD_CHUNK_SIZE)); do
-  chunk="${PAYLOAD:offset:PAYLOAD_CHUNK_SIZE}"
-  scripts/vm-run.sh -c "printf '%s' '$chunk' >> '$REMOTE_PAYLOAD_FILE'"
-done
-unset PAYLOAD chunk
+if [ -n "$OVERLAY_B64" ]; then
+  overlay_chunks=$(((${#OVERLAY_B64} + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE))
+  echo "local overlay: $(( ${#OVERLAY_B64} / 1024 )) KiB (base64), ${overlay_chunks} Run Command chunk(s)"
+  first_chunk="${OVERLAY_B64:0:PAYLOAD_CHUNK_SIZE}"
+  scripts/vm-run.sh -c "install -d -m 700 '${REMOTE_OVERLAY_FILE%/*}'; printf '%s' '$first_chunk' > '$REMOTE_OVERLAY_FILE'; chmod 600 '$REMOTE_OVERLAY_FILE'"
+  for ((offset = PAYLOAD_CHUNK_SIZE; offset < ${#OVERLAY_B64}; offset += PAYLOAD_CHUNK_SIZE)); do
+    chunk="${OVERLAY_B64:offset:PAYLOAD_CHUNK_SIZE}"
+    scripts/vm-run.sh -c "printf '%s' '$chunk' >> '$REMOTE_OVERLAY_FILE'"
+  done
+  unset OVERLAY_B64 first_chunk chunk
+else
+  echo "local overlay: none"
+fi
 
 REMOTE_SCRIPT="$(cat <<EOF
 #!/bin/bash
 set -euo pipefail
-cleanup_payload() {
-  rm -f '$REMOTE_PAYLOAD_FILE'
+work_dir="\$(mktemp -d)"
+cleanup_deploy() {
+  rm -rf "\$work_dir"
+  rm -f '$REMOTE_OVERLAY_FILE'
 }
-trap cleanup_payload EXIT
-mkdir -p $REMOTE_DIR && cd $REMOTE_DIR
-base64 -d < '$REMOTE_PAYLOAD_FILE' | tar -xzf - --no-same-owner
-cleanup_payload
+trap cleanup_deploy EXIT
+archive_url="\$(printf '%s' '$ARCHIVE_URL_B64' | base64 -d)"
+lab_path="\$(printf '%s' '$LAB_PATH_B64' | base64 -d)"
+archive="\$work_dir/source.tar.gz"
+if ! curl --fail --location --silent --show-error --retry 3 --retry-delay 2 \
+    --output "\$archive" "\$archive_url"; then
+  echo "ERROR: cannot download commit $SOURCE_COMMIT from $SOURCE_REPOSITORY" >&2
+  echo "Ensure the commit exists on the public GitHub origin or set DEPLOY_ARCHIVE_URL." >&2
+  exit 1
+fi
+archive_root="\$(tar -tzf "\$archive" | awk -F/ 'NR == 1 { root = \$1 } END { print root }')"
+[ -n "\$archive_root" ] || { echo "ERROR: downloaded GitHub archive is empty" >&2; exit 1; }
+tar -xzf "\$archive" -C "\$work_dir" --no-same-owner
+source_dir="\$work_dir/\$archive_root/\$lab_path"
+[ -d "\$source_dir" ] || {
+  echo "ERROR: GitHub archive does not contain \$lab_path" >&2
+  exit 1
+}
+mkdir -p $REMOTE_DIR
+find $REMOTE_DIR -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf -- {} +
+cp -a "\$source_dir/." $REMOTE_DIR/
+if [ '$OVERLAY_PRESENT' = 1 ]; then
+  [ -f '$REMOTE_OVERLAY_FILE' ] || {
+    echo "ERROR: local deployment overlay was not staged" >&2
+    exit 1
+  }
+  base64 -d < '$REMOTE_OVERLAY_FILE' | tar -xzf - -C $REMOTE_DIR --no-same-owner
+fi
+printf '%s' '$DELETED_B64' | base64 -d |
+  while IFS= read -r -d '' deleted_path; do
+    rm -rf -- "$REMOTE_DIR/\$deleted_path"
+  done
+cleanup_deploy
 trap - EXIT
+cd $REMOTE_DIR
 echo '$ENV_B64' | base64 -d | bash scripts/merge-env.sh
 sed -i \
   -e '/^MODEL_REPO=/d' \
@@ -244,7 +341,6 @@ EOF
 
 # Pass the script as a file: on Windows `az` is a .cmd wrapper limited to an
 # ~8 KB command line.
-TMP_SCRIPT="$(mktemp)"
-trap 'rm -f "$TMP_SCRIPT"' EXIT
+TMP_SCRIPT="${LOCAL_TMP_DIR}/remote-script"
 printf '%s\n' "$REMOTE_SCRIPT" > "$TMP_SCRIPT"
 scripts/vm-run.sh "$TMP_SCRIPT"
