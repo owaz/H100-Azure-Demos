@@ -61,8 +61,8 @@ MODEL_COMMAND_ONLY=1 \
 tmp_catalog="$(mktemp)"
 tmp_dir="$(mktemp -d)"
 overlay_test_file="config/.deploy-overlay-test"
-deleted_test_backup="${tmp_dir}/env-example"
-trap 'rm -f "$tmp_catalog" "$overlay_test_file"; if [ -f "$deleted_test_backup" ]; then mv "$deleted_test_backup" .env.example; fi; rm -rf "$tmp_dir"' EXIT
+renamed_test_file="config/.env.example-renamed"
+trap 'rm -f "$tmp_catalog" "$overlay_test_file"; if [ -f "$renamed_test_file" ]; then mv "$renamed_test_file" .env.example; fi; rm -rf "$tmp_dir"' EXIT
 jq '.models += [.models[0]]' config/models.json > "$tmp_catalog"
 if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null 2>&1; then
   echo "duplicate model id unexpectedly validated" >&2
@@ -142,19 +142,18 @@ fi
 EOF
 chmod +x "${tmp_dir}/az"
 
-printf '%s\n' local-overlay-test > "$overlay_test_file"
-mv .env.example "$deleted_test_backup"
+dd if=/dev/urandom of="$overlay_test_file" bs=1024 count=160 2>/dev/null
+mv .env.example "$renamed_test_file"
 PATH="${tmp_dir}:${PATH}" \
 CAPTURED_REMOTE_SCRIPT="${tmp_dir}/remote-script" \
 REMOTE_SCRIPT_SIZES="${tmp_dir}/remote-script-sizes" \
 DEPLOY_GIT_ORIGIN_URL=git@github.com:example/fork.git \
-DEPLOY_PAYLOAD_CHUNK_SIZE=512 \
 SUBSCRIPTION=sub-test \
 RESOURCE_GROUP=rg-test \
 VM_NAME=vm-test \
 DEPLOY_MODEL=0 \
   scripts/deploy.sh sync >"${tmp_dir}/no-model-sync-output"
-mv "$deleted_test_backup" .env.example
+mv "$renamed_test_file" .env.example
 rm "$overlay_test_file"
 grep -Fq "Model: none (sync only)" "${tmp_dir}/no-model-sync-output"
 grep -Fq "source: example/fork@$(git rev-parse HEAD)" "${tmp_dir}/no-model-sync-output"

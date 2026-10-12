@@ -98,7 +98,7 @@ if [ -s "$OVERLAY_LIST" ]; then
   OVERLAY_PRESENT=1
 fi
 DELETED_B64="$(
-  git diff --relative --name-only -z --diff-filter=D HEAD -- . | base64 -w0
+  git diff --no-renames --relative --name-only -z --diff-filter=D HEAD -- . | base64 -w0
 )"
 PAYLOAD_CHUNK_SIZE="${DEPLOY_PAYLOAD_CHUNK_SIZE:-$((128 * 1024))}"
 case "$PAYLOAD_CHUNK_SIZE" in
@@ -223,11 +223,22 @@ fi
 if [ -n "$OVERLAY_B64" ]; then
   overlay_chunks=$(((${#OVERLAY_B64} + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE))
   echo "local overlay: $(( ${#OVERLAY_B64} / 1024 )) KiB (base64), ${overlay_chunks} Run Command chunk(s)"
+  CHUNK_SCRIPT="${LOCAL_TMP_DIR}/overlay-chunk"
   first_chunk="${OVERLAY_B64:0:PAYLOAD_CHUNK_SIZE}"
-  scripts/vm-run.sh -c "install -d -m 700 '${REMOTE_OVERLAY_FILE%/*}'; printf '%s' '$first_chunk' > '$REMOTE_OVERLAY_FILE'; chmod 600 '$REMOTE_OVERLAY_FILE'"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+    printf "install -d -m 700 '%s'\n" "${REMOTE_OVERLAY_FILE%/*}"
+    printf "printf '%%s' '%s' > '%s'\n" "$first_chunk" "$REMOTE_OVERLAY_FILE"
+    printf "chmod 600 '%s'\n" "$REMOTE_OVERLAY_FILE"
+  } > "$CHUNK_SCRIPT"
+  scripts/vm-run.sh "$CHUNK_SCRIPT"
   for ((offset = PAYLOAD_CHUNK_SIZE; offset < ${#OVERLAY_B64}; offset += PAYLOAD_CHUNK_SIZE)); do
     chunk="${OVERLAY_B64:offset:PAYLOAD_CHUNK_SIZE}"
-    scripts/vm-run.sh -c "printf '%s' '$chunk' >> '$REMOTE_OVERLAY_FILE'"
+    {
+      printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+      printf "printf '%%s' '%s' >> '%s'\n" "$chunk" "$REMOTE_OVERLAY_FILE"
+    } > "$CHUNK_SCRIPT"
+    scripts/vm-run.sh "$CHUNK_SCRIPT"
   done
   unset OVERLAY_B64 first_chunk chunk
 else
