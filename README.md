@@ -99,7 +99,7 @@ LiteLLM publishes the model as `local-llm`. Clients can use the OpenAI chat comp
 
 ## Azure infrastructure
 
-[`infra/provision-spot-vm.sh`](h100-spot-llm-lab/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities.
+[`infra/provision-spot-vm.sh`](h100-spot-llm-lab/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities. `RESOURCE_GROUP` is the single resource-group input shared by compute and monitoring, so deleting that group removes the complete lab.
 
 The VM uses Azure Spot capacity by default. For new VMs, the provisioner offers the one-GPU NC40 and two-GPU NC80 sizes; `VM_SIZE` provides the same choice for non-interactive runs. [`infra/spot-regions.sh`](h100-spot-llm-lab/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment and accepts `SKU` to select the size to inspect. You can remove the Spot flags when you need regular capacity and have the required quota.
 
@@ -170,9 +170,9 @@ Run these commands from the demo directory:
 ```bash
 cd h100-spot-llm-lab
 cp .env.example .env
+export RESOURCE_GROUP=rg-llm-h100-lab
 LOCATION=southeastasia infra/provision-monitoring.sh
-LOCATION=southeastasia \
-  IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+LOCATION=southeastasia infra/provision-spot-vm.sh
 scripts/vm-run.sh scripts/bootstrap-host.sh
 scripts/deploy.sh up
 scripts/vm-run.sh scripts/smoke-test.sh

@@ -66,17 +66,21 @@ esac
 EFFECTIVE_VM_SIZE="$REQUESTED_VM_SIZE"
 
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"
-export SUBSCRIPTION
+read -r -p "Azure resource group: " RESOURCE_GROUP
+[ -n "$RESOURCE_GROUP" ] || { echo "ERROR: resource group is required" >&2; exit 2; }
+export SUBSCRIPTION RESOURCE_GROUP
 # shellcheck source=lib/find-vm.sh
 . scripts/lib/find-vm.sh
 reuse_existing=0
-find_rc=0
-find_stack_vm || find_rc=$?
+find_rc=1
+if [ "$(az group exists --subscription "$SUBSCRIPTION" -n "$RESOURCE_GROUP" -o tsv)" = true ]; then
+  find_stack_vm || find_rc=$?
+fi
 case "$find_rc" in
   0)
-    existing_size="$(az vm show --subscription "$SUBSCRIPTION" -g "$FOUND_RG" -n "$FOUND_VM" \
+    existing_size="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$FOUND_VM" \
       --query hardwareProfile.vmSize -o tsv | tr -d '\r')"
-    existing_power="$(az vm get-instance-view --subscription "$SUBSCRIPTION" -g "$FOUND_RG" -n "$FOUND_VM" \
+    existing_power="$(az vm get-instance-view --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$FOUND_VM" \
       --query "instanceView.statuses[?starts_with(code,'PowerState/')].displayStatus | [0]" -o tsv | tr -d '\r')"
     echo
     echo "Existing lab VM: ${FOUND_VM} (${existing_size}, ${FOUND_LOCATION}, ${existing_power})"
@@ -152,21 +156,20 @@ if prompt_yes_no "Enable the ngrok public tunnel?" no; then
 fi
 
 if [ "$reuse_existing" = 1 ]; then
-  RG="$FOUND_RG"
   VM_NAME="$FOUND_VM"
   LOCATION="$FOUND_LOCATION"
-  export RG VM_NAME LOCATION
-  actual_size="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+  export VM_NAME LOCATION
+  actual_size="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
     --query hardwareProfile.vmSize -o tsv | tr -d '\r')"
   [ "$actual_size" = "$EFFECTIVE_VM_SIZE" ] || {
     echo "ERROR: ${VM_NAME} changed size during selection (${actual_size})" >&2
     exit 2
   }
-  power_code="$(az vm get-instance-view --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+  power_code="$(az vm get-instance-view --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
     --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv | tr -d '\r')"
   if [ "$power_code" != PowerState/running ]; then
     echo "==> Starting ${VM_NAME}"
-    az vm start --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" -o none
+    az vm start --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none
   fi
 else
   read -r -p "Azure region (for example southeastasia): " LOCATION
@@ -183,10 +186,9 @@ else
   find_rc=0
   find_stack_vm || find_rc=$?
   [ "$find_rc" = 0 ] || { echo "ERROR: the newly provisioned VM cannot be discovered" >&2; exit 1; }
-  RG="$FOUND_RG"
   VM_NAME="$FOUND_VM"
   LOCATION="$FOUND_LOCATION"
-  export RG VM_NAME LOCATION
+  export VM_NAME LOCATION
 fi
 
 if [ "$enable_monitoring" = 1 ]; then

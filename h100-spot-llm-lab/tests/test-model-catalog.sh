@@ -109,4 +109,6 @@ if printf '' | scripts/launch.sh >/dev/null 2>&1; then
   exit 1
 fi
 
+bash tests/test-resource-group.sh
+
 echo "model catalog tests: PASS"

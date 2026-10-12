@@ -15,21 +15,19 @@
 # Reuse first: the script looks for an existing stack VM (tags
 # project=llm-self-hosting role=llm-h100) in the subscription. If one exists,
 # it reuses it (starting it if deallocated) and creates nothing. Only if none
-# exists does it create a new resource group + VM named with the region,
-# placement and today's date, e.g. rg-llm-h100-uksouth-z2-261005 /
-# vm-llm-h100-uks-z2-261005 for uksouth zone 2 on 2026-10-05. The VM name uses
-# a short region code (region_short below). Pick the region and optional zone
-# with infra/spot-regions.sh.
+# exists does it create a new VM in RESOURCE_GROUP, named with the region,
+# placement and today's date, e.g. vm-llm-h100-uks-z2-261005 for uksouth zone 2
+# on 2026-10-05. The VM name uses a short region code (region_short below).
+# Pick the region and optional zone with infra/spot-regions.sh.
 #
-#   LOCATION=southeastasia ZONE=2 infra/provision-spot-vm.sh   # reuse, or create
-#   LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh # regional VM
-#   VM_SIZE=Standard_NC80adis_H100_v5 LOCATION=... infra/provision-spot-vm.sh
-#   FORCE_NEW=1 LOCATION=... ZONE=... infra/provision-spot-vm.sh
-#   RG=... VM_NAME=... infra/provision-spot-vm.sh    # explicit names, no lookup
+#   RESOURCE_GROUP=rg-llm-lab LOCATION=southeastasia ZONE=2 infra/provision-spot-vm.sh
+#   RESOURCE_GROUP=rg-llm-lab LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh
+#   RESOURCE_GROUP=rg-llm-lab VM_SIZE=Standard_NC80adis_H100_v5 LOCATION=... infra/provision-spot-vm.sh
+#   RESOURCE_GROUP=rg-llm-lab FORCE_NEW=1 LOCATION=... ZONE=... infra/provision-spot-vm.sh
+#   RESOURCE_GROUP=rg-llm-lab VM_NAME=... infra/provision-spot-vm.sh
 #
-# Telemetry (optional): set IDENTITY_RG to the resource group holding the
-# regional ingestion identities from infra/telemetry-identities.sh, and the
-# one for LOCATION (id-llm-ingest-<region>) is attached to the VM.
+# If the regional ingestion identity id-llm-ingest-<region> already exists in
+# RESOURCE_GROUP, it is attached to the VM automatically.
 #
 # Safe to re-run: the network steps are idempotent, and the VM step is
 # skipped if the VM already exists.
@@ -42,6 +40,7 @@ ZONE="${ZONE:-none}"
 PREFIX="${PREFIX:-llm-h100}"
 DATE_SUFFIX="${DATE_SUFFIX:-$(date +%y%m%d)}"   # yymmdd, e.g. 261009
 FORCE_NEW="${FORCE_NEW:-0}"
+RESOURCE_GROUP="${RESOURCE_GROUP:-}"
 VM_SIZE="${VM_SIZE:-}"
 IMAGE="${IMAGE:-Canonical:ubuntu-24_04-lts:server:latest}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
@@ -49,8 +48,6 @@ OS_DISK_GB="${OS_DISK_GB:-128}"
 DATA_DISK_GB="${DATA_DISK_GB:-512}"
 VNET_CIDR="${VNET_CIDR:-10.60.0.0/16}"
 SUBNET_CIDR="${SUBNET_CIDR:-10.60.1.0/24}"
-IDENTITY_SUBSCRIPTION="${IDENTITY_SUBSCRIPTION:-$SUBSCRIPTION}"
-IDENTITY_RG="${IDENTITY_RG:-}"
 VNET="vnet-${PREFIX}"
 SUBNET="snet-${PREFIX}"
 NSG="nsg-${PREFIX}"
@@ -64,6 +61,21 @@ NAT_PIP="pip-nat-${PREFIX}"
 TAGS=(project="$STACK_TAG_PROJECT" role="$STACK_TAG_ROLE" created="$(date +%F)")
 
 az() { command az "$@" --subscription "$SUBSCRIPTION"; }
+
+resolve_resource_group() {
+  if [ -n "$RESOURCE_GROUP" ]; then
+    return
+  fi
+  if [ ! -t 0 ]; then
+    echo "RESOURCE_GROUP is required in non-interactive mode" >&2
+    exit 2
+  fi
+  read -r -p "Azure resource group: " RESOURCE_GROUP
+  [ -n "$RESOURCE_GROUP" ] || {
+    echo "resource group is required" >&2
+    exit 2
+  }
+}
 
 validate_vm_size() {
   if ! vm_size_is_supported "$VM_SIZE"; then
@@ -96,12 +108,15 @@ select_vm_size() {
 if [ -n "$VM_SIZE" ]; then
   validate_vm_size
 fi
+resolve_resource_group
 
 REUSE=0
-if [ -z "${RG:-}" ] && [ -z "${VM_NAME:-}" ] && [ "$FORCE_NEW" != 1 ]; then
-  rc=0; find_stack_vm || rc=$?
+if [ -z "${VM_NAME:-}" ] && [ "$FORCE_NEW" != 1 ] &&
+    [ "$(az group exists -n "$RESOURCE_GROUP" -o tsv)" = true ]; then
+  rc=0
+  find_stack_vm || rc=$?
   case "$rc" in
-    0) REUSE=1; RG="$FOUND_RG"; VM_NAME="$FOUND_VM"; LOCATION="$FOUND_LOCATION" ;;
+    0) REUSE=1; VM_NAME="$FOUND_VM"; LOCATION="$FOUND_LOCATION" ;;
     1) ;;  # none exists: create today's below
     *) echo "==> Aborting: can't tell whether a stack VM exists" >&2; exit 1 ;;
   esac
@@ -148,50 +163,51 @@ region_short() {
     *) echo "$1" ;;
   esac
 }
-RG="${RG:-rg-${PREFIX}-${LOCATION}-${PLACEMENT}-${DATE_SUFFIX}}"
 VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}}"
 
-if [ "$REUSE" != 1 ] && ! az vm show -g "$RG" -n "$VM_NAME" -o none 2>/dev/null; then
+if [ "$REUSE" != 1 ] && ! az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none 2>/dev/null; then
   select_vm_size
 fi
 
-# Regional OTLP ingestion identity from infra/telemetry-identities.sh. Each one
-# has isolationScope=Regional (usable only in its own region), so the name
-# follows LOCATION.
+# The regional identity has isolationScope=Regional, so its name follows
+# LOCATION and it must live with the rest of the lab in RESOURCE_GROUP.
 INGEST_IDENTITY_ID="${INGEST_IDENTITY_ID:-}"
-if [ -z "$INGEST_IDENTITY_ID" ] && [ -n "$IDENTITY_RG" ]; then
-  INGEST_IDENTITY_ID="/subscriptions/${IDENTITY_SUBSCRIPTION}/resourceGroups/${IDENTITY_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-llm-ingest-${LOCATION}"
+if [ -z "$INGEST_IDENTITY_ID" ]; then
+  candidate_identity="/subscriptions/${SUBSCRIPTION}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-llm-ingest-${LOCATION}"
+  if command az identity show --ids "$candidate_identity" --subscription "$SUBSCRIPTION" -o none 2>/dev/null; then
+    INGEST_IDENTITY_ID="$candidate_identity"
+  fi
 fi
 
 if [ "$REUSE" = 1 ]; then
-  echo "==> Reusing existing VM ${VM_NAME} in ${RG} (${LOCATION}); nothing new is created"
-  power="$(az vm get-instance-view -g "$RG" -n "$VM_NAME" \
+  echo "==> Reusing existing VM ${VM_NAME} in ${RESOURCE_GROUP} (${LOCATION}); nothing new is created"
+  power="$(az vm get-instance-view -g "$RESOURCE_GROUP" -n "$VM_NAME" \
     --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv | tr -d '[:space:]')"
   echo "    power state: ${power#PowerState/}"
   if [ "$power" != "PowerState/running" ]; then
     echo "==> Starting ${VM_NAME} (Spot start can fail if the region has no capacity)"
-    az vm start -g "$RG" -n "$VM_NAME" -o none
+    az vm start -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none
   fi
 else
-# No existing stack VM: create a new RG + VM named with today's date.
+# No existing stack VM: create the shared resource group and a dated VM.
 
-echo "==> Resource group ${RG} (${LOCATION})"
-az group create -n "$RG" -l "$LOCATION" --tags "${TAGS[@]}" -o none
+echo "==> Resource group ${RESOURCE_GROUP} (${LOCATION})"
+az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags "${TAGS[@]}" -o none
 
 echo "==> NSG ${NSG} (default rules only: deny inbound from the internet)"
-az network nsg create -g "$RG" -n "$NSG" -l "$LOCATION" --tags "${TAGS[@]}" -o none
+az network nsg create -g "$RESOURCE_GROUP" -n "$NSG" -l "$LOCATION" --tags "${TAGS[@]}" -o none
 
 echo "==> NAT gateway ${NAT} for outbound-only internet access"
-az_with_placement network public-ip create -g "$RG" -n "$NAT_PIP" -l "$LOCATION" \
+az_with_placement network public-ip create -g "$RESOURCE_GROUP" -n "$NAT_PIP" -l "$LOCATION" \
   --sku Standard --allocation-method Static --tags "${TAGS[@]}" -o none
-az_with_placement network nat gateway create -g "$RG" -n "$NAT" -l "$LOCATION" \
+az_with_placement network nat gateway create -g "$RESOURCE_GROUP" -n "$NAT" -l "$LOCATION" \
   --public-ip-addresses "$NAT_PIP" --idle-timeout 10 \
   --tags "${TAGS[@]}" -o none
 
 echo "==> VNet ${VNET} / subnet ${SUBNET}"
-az network vnet create -g "$RG" -n "$VNET" -l "$LOCATION" \
+az network vnet create -g "$RESOURCE_GROUP" -n "$VNET" -l "$LOCATION" \
   --address-prefixes "$VNET_CIDR" --tags "${TAGS[@]}" -o none
-az network vnet subnet create -g "$RG" --vnet-name "$VNET" -n "$SUBNET" \
+az network vnet subnet create -g "$RESOURCE_GROUP" --vnet-name "$VNET" -n "$SUBNET" \
   --address-prefixes "$SUBNET_CIDR" \
   --network-security-group "$NSG" --nat-gateway "$NAT" \
   --default-outbound-access false -o none
@@ -200,10 +216,10 @@ IDENTITIES=('[system]')
 if [ -n "$INGEST_IDENTITY_ID" ] && command az identity show --ids "$INGEST_IDENTITY_ID" -o none 2>/dev/null; then
   IDENTITIES+=("$INGEST_IDENTITY_ID")
 else
-  echo "==> WARNING: no ingestion identity for ${LOCATION} (set IDENTITY_RG; see infra/telemetry-identities.sh); telemetry export won't authenticate"
+  echo "==> WARNING: no ingestion identity for ${LOCATION} in ${RESOURCE_GROUP}; provision monitoring to enable telemetry"
 fi
 
-if az vm show -g "$RG" -n "$VM_NAME" -o none 2>/dev/null; then
+if az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" -o none 2>/dev/null; then
   echo "==> VM ${VM_NAME} already exists; skipping create"
 else
   echo "==> Spot VM ${VM_NAME} (${VM_SIZE}, ${PLACEMENT}), no public IP"
@@ -211,7 +227,7 @@ else
   # out-of-tree NVIDIA kernel modules. Security type "Standard" needs the
   # Microsoft.Compute/UseStandardSecurityType feature registered on the
   # subscription.
-  az_with_placement vm create -g "$RG" -n "$VM_NAME" -l "$LOCATION" \
+  az_with_placement vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" -l "$LOCATION" \
     --size "$VM_SIZE" --image "$IMAGE" \
     --security-type TrustedLaunch --enable-secure-boot false --enable-vtpm true \
     --priority Spot --eviction-policy Deallocate --max-price -1 \
@@ -229,10 +245,10 @@ fi  # REUSE
 # it with scripts/vm-power.sh stop (deallocate, so the GPU stops billing).
 
 echo "==> Remote check through run-command (no network path to the VM needed)"
-az vm run-command invoke -g "$RG" -n "$VM_NAME" --command-id RunShellScript \
+az vm run-command invoke -g "$RESOURCE_GROUP" -n "$VM_NAME" --command-id RunShellScript \
   --scripts 'hostname; uname -r; lsblk -o NAME,SIZE,TYPE,MOUNTPOINT; lspci | grep -i nvidia; curl -s -m 10 https://ifconfig.me; echo' \
   --query 'value[0].message' -o tsv
 
 echo "==> Done. VM private IP:"
-az vm list-ip-addresses -g "$RG" -n "$VM_NAME" \
+az vm list-ip-addresses -g "$RESOURCE_GROUP" -n "$VM_NAME" \
   --query '[0].virtualMachine.network.{private:privateIpAddresses[0], public:publicIpAddresses[0].ipAddress}' -o table

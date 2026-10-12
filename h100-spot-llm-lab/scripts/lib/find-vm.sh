@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Shared helper, sourced by infra/provision-spot-vm.sh and scripts/vm-run.sh.
+# Shared helper, sourced by provisioning and VM operation scripts.
 #
 # Every stack VM is tagged project=llm-self-hosting role=llm-h100, and its
-# resource group and VM names carry the region, placement (zone or regional)
-# and a creation-date suffix (yymmdd), e.g. rg-llm-h100-uksouth-z2-261005 /
-# vm-llm-h100-uks-z2-261005 (the VM name with a short region code).
+# VM name carries the region, placement (zone or regional), and a creation-date
+# suffix (yymmdd), e.g. vm-llm-h100-uks-z2-261005.
 #
-# find_stack_vm: sets FOUND_RG, FOUND_VM, FOUND_LOCATION for the most recently
-# created tagged VM in $SUBSCRIPTION (by timeCreated: two VMs made the same day
-# with the same placement share a VM name).
+# find_stack_vm: sets FOUND_RESOURCE_GROUP, FOUND_VM, FOUND_LOCATION for the
+# most recently created tagged VM in $RESOURCE_GROUP.
 #   returns 0 = found, 1 = none exists, 2 = the lookup itself failed
 # Callers must not treat 2 as "none": that would create a duplicate VM.
 # Warns when more than one is found.
@@ -18,10 +16,11 @@ STACK_TAG_ROLE="llm-h100"
 
 find_stack_vm() {
   local raw rows count
-  if ! raw="$(command az vm list --subscription "$SUBSCRIPTION" \
+  : "${RESOURCE_GROUP:?set RESOURCE_GROUP before calling find_stack_vm}"
+  if ! raw="$(command az vm list --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" \
       --query "[?tags.project=='${STACK_TAG_PROJECT}' && tags.role=='${STACK_TAG_ROLE}'].[timeCreated, name, resourceGroup, location]" \
       -o tsv)"; then
-    echo "==> ERROR: listing VMs in subscription ${SUBSCRIPTION} failed (az login?)" >&2
+    echo "==> ERROR: listing VMs in resource group ${RESOURCE_GROUP} failed (az login?)" >&2
     return 2
   fi
   rows="$(printf '%s' "$raw" | tr -d '\r' | sed '/^$/d' | sort -r)"
@@ -31,7 +30,5 @@ find_stack_vm() {
     echo "==> NOTE: ${count} stack VMs found; using the newest. Others:" >&2
     printf '%s\n' "$rows" | tail -n +2 | sed 's/^/      /' >&2
   fi
-  read -r _ FOUND_VM FOUND_RG FOUND_LOCATION <<<"$(printf '%s\n' "$rows" | head -n 1)"
-  # az vm list may return the RG name upper-cased; names are case-insensitive.
-  FOUND_RG="$(printf '%s' "$FOUND_RG" | tr '[:upper:]' '[:lower:]')"
+  read -r _ FOUND_VM FOUND_RESOURCE_GROUP FOUND_LOCATION <<<"$(printf '%s\n' "$rows" | head -n 1)"
 }

@@ -37,19 +37,20 @@ PAYLOAD="$(git ls-files -z --cached --others --exclude-standard \
   | tar --null -T - -czf - | base64 -w0)"
 echo "payload: $(( ${#PAYLOAD} / 1024 )) KiB (base64)"
 
-# Resolve the VM once here; scripts/vm-run.sh uses RG + VM_NAME when both are set.
+# Resolve the VM once here; scripts/vm-run.sh uses RESOURCE_GROUP + VM_NAME.
 SUBSCRIPTION="${SUBSCRIPTION:-$(az account show --query id -o tsv | tr -d '[:space:]')}"   # default: the az CLI's current subscription
-if [ -z "${RG:-}" ] || [ -z "${VM_NAME:-}" ]; then
+: "${RESOURCE_GROUP:?set RESOURCE_GROUP to the lab resource group}"
+if [ -z "${VM_NAME:-}" ]; then
   # shellcheck source=lib/find-vm.sh
   . scripts/lib/find-vm.sh
   rc=0; find_stack_vm || rc=$?
-  if [ "$rc" = 1 ]; then echo "no stack VM found in subscription ${SUBSCRIPTION}; run infra/provision-spot-vm.sh" >&2; exit 1; fi
+  if [ "$rc" = 1 ]; then echo "no stack VM found in resource group ${RESOURCE_GROUP}; run infra/provision-spot-vm.sh" >&2; exit 1; fi
   [ "$rc" = 0 ] || exit 1
-  RG="$FOUND_RG"; VM_NAME="$FOUND_VM"
+  VM_NAME="$FOUND_VM"
 fi
-export SUBSCRIPTION RG VM_NAME
+export SUBSCRIPTION RESOURCE_GROUP VM_NAME
 
-VM_SIZE="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+VM_SIZE="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
   --query hardwareProfile.vmSize -o tsv | tr -d '\r')"
 case "$VM_SIZE" in
   Standard_NC40ads_H100_v5|Standard_NC80adis_H100_v5) ;;
@@ -124,7 +125,7 @@ fi
 
 if [ "$ACTION" = up ] && { [ "$MONITORING_MODE" = enabled ] || [[ "${COMPOSE_FILES:-}" == *compose.observability.yaml* ]]; }; then
   # The ingestion identity attached to the VM decides the collector's client ID.
-  INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+  INGEST_ID="$(az vm show --subscription "$SUBSCRIPTION" -g "$RESOURCE_GROUP" -n "$VM_NAME" \
     --query "keys(identity.userAssignedIdentities || \`{}\`)[?contains(@, '/id-llm-ingest-')] | [0]" \
     -o tsv | tr -d '\r')"
   if [ -z "$INGEST_ID" ]; then

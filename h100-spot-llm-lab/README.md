@@ -75,9 +75,10 @@ For automation or step-by-step control, the original scripts remain available:
 
 ```bash
 cp .env.example .env
+export RESOURCE_GROUP=rg-llm-h100-lab
 MODEL_ID=qwen3.8-27b-fp8
 LOCATION=southeastasia infra/provision-monitoring.sh       # optional
-LOCATION=southeastasia IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh  # choose NC40 or NC80
+LOCATION=southeastasia infra/provision-spot-vm.sh           # choose NC40 or NC80
 scripts/vm-run.sh scripts/bootstrap-host.sh   # data disk, NVIDIA driver, Docker, container toolkit (~4 min)
 MODEL_ID="$MODEL_ID" scripts/deploy.sh up      # core-only unless monitoring was provisioned
 scripts/vm-run.sh scripts/vm-status.sh        # containers, model download, GPU memory
@@ -96,15 +97,17 @@ NC80 (two H100s). It does not prompt when it reuses an existing tagged VM. For
 CI or other non-interactive runs, set the choice explicitly:
 
 ```bash
-VM_SIZE=Standard_NC80adis_H100_v5 LOCATION=southeastasia \
-  IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+RESOURCE_GROUP=rg-llm-h100-lab VM_SIZE=Standard_NC80adis_H100_v5 \
+  LOCATION=southeastasia infra/provision-spot-vm.sh
 ```
 
-The reverse order also works: provision the VM without `IDENTITY_RG`, then run
-`LOCATION=<vm-region> infra/provision-monitoring.sh`. The monitoring script
-finds tagged stack VMs in that region and attaches the identity. It is safe to
-rerun: existing resources, role assignments and identity attachments are
-reused.
+`RESOURCE_GROUP` is the only resource-group input. Both provisioners prompt
+for it in an interactive terminal and require it explicitly in non-interactive
+runs. The reverse order also works: provision the VM first, then run
+`RESOURCE_GROUP=<same-group> LOCATION=<vm-region> infra/provision-monitoring.sh`.
+The monitoring script finds tagged stack VMs in that group and region and
+attaches the identity. It is safe to rerun: existing resources, role
+assignments and identity attachments are reused.
 
 Provisioning defaults to regional placement without an availability-zone
 constraint. To require a specific zone, set `ZONE=1`, `ZONE=2`, or `ZONE=3`.
@@ -112,16 +115,16 @@ If Azure returns `OverconstrainedZonalAllocationRequest`, retry with regional
 placement:
 
 ```bash
-LOCATION=southeastasia ZONE=none IDENTITY_RG=rg-llm-telemetry infra/provision-spot-vm.sh
+RESOURCE_GROUP=rg-llm-h100-lab LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh
 ```
 
 `ZONE=none` creates a regional VM and omits the zone from the VM, NAT gateway,
 and NAT public IP. It improves the allocator's options but does not guarantee
 scarce H100 Spot capacity. If regional placement also fails, try another region
 reported by `infra/spot-regions.sh`, or use regular capacity after obtaining
-`Standard NCadsH100v5 Family` quota. A failed attempt's resource group is not
-reused because it contains no tagged stack VM; delete it separately when it is
-no longer needed.
+`Standard NCadsH100v5 Family` quota. A failed attempt can be retried with the
+same `RESOURCE_GROUP`; the idempotent networking steps reuse resources already
+created there.
 
 When both ngrok values are configured, call the model through its URL from an
 allow-listed client:
@@ -134,11 +137,12 @@ curl https://<your-domain>.ngrok-free.dev/v1/chat/completions -H 'Content-Type: 
 Day to day:
 
 ```bash
+export RESOURCE_GROUP=rg-llm-h100-lab
 scripts/vm-power.sh stop|start|status         # deallocate / start (the stack restarts on boot)
 scripts/vm-run.sh -c 'docker logs --tail 50 llm-model'
 scripts/vm-run.sh scripts/bench.sh            # vllm bench serve at concurrency 1/4/16/32 + shared prefix
 scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/scripts/realtext.py 1 32'   # real-text decode speed
-az group delete -n <resource-group> --yes     # remove everything
+az group delete -n "$RESOURCE_GROUP" --yes    # remove the complete lab
 ```
 
 `deploy.sh` sends the files of this folder plus the non-empty lines of your local `.env`, and
@@ -214,22 +218,16 @@ telemetry keys in the ignored workstation `.env`. It also prints those values
 for CI or copy/paste use. Common options:
 
 ```bash
-LOCATION=southeastasia infra/provision-monitoring.sh
-LOCATION=southeastasia WRITE_ENV=0 infra/provision-monitoring.sh  # print only
-LOCATION=southeastasia ATTACH_VMS=0 infra/provision-monitoring.sh # don't attach VMs
+RESOURCE_GROUP=rg-llm-h100-lab LOCATION=southeastasia infra/provision-monitoring.sh
+RESOURCE_GROUP=rg-llm-h100-lab LOCATION=southeastasia WRITE_ENV=0 infra/provision-monitoring.sh
+RESOURCE_GROUP=rg-llm-h100-lab LOCATION=southeastasia ATTACH_VMS=0 infra/provision-monitoring.sh
 ```
 
-Resource names can be overridden with `MONITORING_RG`, `LAW_NAME`, `AMW_NAME`,
+Resource names can be overridden with `LAW_NAME`, `AMW_NAME`,
 `APP_INSIGHTS_NAME`, `DCE_NAME` and `DCR_NAME`. All resources must be in the
-same region. The script registers required Azure resource providers when the
-caller has permission.
-
-To remove monitoring, first stop using its identity, then delete its resource
-group:
-
-```bash
-az group delete -n rg-llm-telemetry --yes
-```
+same resource group and region. The script registers required Azure resource
+providers when the caller has permission. Deleting `RESOURCE_GROUP` removes
+monitoring together with the VM, network, disks, and managed identity.
 
 The lower-level [`infra/telemetry-identities.sh`](infra/telemetry-identities.sh)
 remains available for adding identities in more regions to an existing DCR,
