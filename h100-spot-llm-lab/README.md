@@ -121,8 +121,17 @@ scripts/vm-run.sh scripts/smoke-test.sh       # health, chat, declared capabilit
 ```
 
 `vm-run.sh` propagates the guest script's exit status instead of Azure Run
-Command's extension status. The interactive launcher reports completion only
-after the model, gateway, and any selected ngrok tunnel are ready.
+Command's extension status. `deploy.sh` downloads the exact checked-out commit
+from the public GitHub `origin` through the VM's NAT gateway, then overlays
+modified and untracked local files so workstation-only configuration is
+preserved. Large local overlays use bounded Run Command chunks. The interactive
+launcher reports completion only after the model, gateway, and any selected
+ngrok tunnel are ready.
+
+The GitHub archive is pinned to the local `HEAD`, not a moving branch. Clones
+and public forks work with HTTPS or SSH GitHub remotes. If the commit is not
+available from a public GitHub origin, publish it first or set
+`DEPLOY_ARCHIVE_URL` to an immutable public `.tar.gz` archive.
 
 When monitoring is skipped, `deploy.sh up` detects the placeholder telemetry
 values and starts only `compose.yaml`. You can also make that choice explicit:

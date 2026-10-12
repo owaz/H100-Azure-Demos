@@ -60,7 +60,9 @@ MODEL_COMMAND_ONLY=1 \
 
 tmp_catalog="$(mktemp)"
 tmp_dir="$(mktemp -d)"
-trap 'rm -f "$tmp_catalog"; rm -rf "$tmp_dir"' EXIT
+overlay_test_file="config/.deploy-overlay-test"
+renamed_test_file="config/.env.example-renamed"
+trap 'rm -f "$tmp_catalog" "$overlay_test_file"; if [ -f "$renamed_test_file" ]; then mv "$renamed_test_file" .env.example; fi; rm -rf "$tmp_dir"' EXIT
 jq '.models += [.models[0]]' config/models.json > "$tmp_catalog"
 if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null 2>&1; then
   echo "duplicate model id unexpectedly validated" >&2
@@ -127,6 +129,7 @@ elif [ "$1 $2 $3" = "vm run-command invoke" ]; then
   while [ "$#" -gt 0 ]; do
     if [ "$1" = "--scripts" ]; then
       cp "${2#@}" "$CAPTURED_REMOTE_SCRIPT"
+      wc -c < "${2#@}" >> "$REMOTE_SCRIPT_SIZES"
       break
     fi
     shift
@@ -139,20 +142,39 @@ fi
 EOF
 chmod +x "${tmp_dir}/az"
 
+dd if=/dev/urandom of="$overlay_test_file" bs=1024 count=160 2>/dev/null
+mv .env.example "$renamed_test_file"
 PATH="${tmp_dir}:${PATH}" \
 CAPTURED_REMOTE_SCRIPT="${tmp_dir}/remote-script" \
+REMOTE_SCRIPT_SIZES="${tmp_dir}/remote-script-sizes" \
+DEPLOY_GIT_ORIGIN_URL=git@github.com:example/fork.git \
 SUBSCRIPTION=sub-test \
 RESOURCE_GROUP=rg-test \
 VM_NAME=vm-test \
 DEPLOY_MODEL=0 \
   scripts/deploy.sh sync >"${tmp_dir}/no-model-sync-output"
+mv "$renamed_test_file" .env.example
+rm "$overlay_test_file"
 grep -Fq "Model: none (sync only)" "${tmp_dir}/no-model-sync-output"
+grep -Fq "source: example/fork@$(git rev-parse HEAD)" "${tmp_dir}/no-model-sync-output"
+grep -Fq "local overlay:" "${tmp_dir}/no-model-sync-output"
+grep -Eq 'local overlay: [0-9]+ KiB \(base64\), [2-9][0-9]* Run Command chunk\(s\)' \
+  "${tmp_dir}/no-model-sync-output"
 grep -Fq "sed -i -e '/^MODEL_ID=/d' -e '/^MODEL_VM_SIZE=/d' .env" \
   "${tmp_dir}/remote-script"
 grep -Fq "docker rm -f llm-model-download llm-model llm-litellm llm-ngrok" \
   "${tmp_dir}/remote-script"
 grep -Fq "model services stopped; stack files are synced without a selected model" \
   "${tmp_dir}/remote-script"
+grep -Fq "curl --fail --location --silent --show-error --retry 3" \
+  "${tmp_dir}/remote-script"
+archive_url="https://github.com/example/fork/archive/$(git rev-parse HEAD).tar.gz"
+grep -Fq "$(printf '%s' "$archive_url" | base64 -w0)" "${tmp_dir}/remote-script"
+grep -Fq "base64 -d < '/root/.cache/llm-self-hosting/deploy-overlay.b64'" \
+  "${tmp_dir}/remote-script"
+grep -Fq "$(printf '.env.example\0' | base64 -w0)" "${tmp_dir}/remote-script"
+[ "$(wc -l < "${tmp_dir}/remote-script-sizes" | tr -d ' ')" -gt 2 ]
+[ "$(sort -nr "${tmp_dir}/remote-script-sizes" | head -n 1 | tr -d ' ')" -lt 140000 ]
 
 bash tests/test-resource-group.sh
 bash tests/test-vm-run.sh
