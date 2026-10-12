@@ -75,6 +75,8 @@ services:
       - "${QWEN38_27B_CONTEXT_SIZE:-262144}"
       - --gpu-memory-utilization
       - "${QWEN38_27B_GPU_MEMORY_UTILIZATION:-0.93}"
+      - --tensor-parallel-size
+      - "${QWEN38_27B_TENSOR_PARALLEL_SIZE:-1}"
       - --max-num-seqs
       - "${QWEN38_27B_MAX_NUM_SEQS:-32}"
       - --max-num-batched-tokens

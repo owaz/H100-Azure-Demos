@@ -25,6 +25,8 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/.."
+# shellcheck source=lib/vm-size.sh
+. scripts/lib/vm-size.sh
 
 ACTION="${1:-sync}"
 case "$ACTION" in sync|up) ;; *) echo "usage: deploy.sh [sync|up]" >&2; exit 2 ;; esac
@@ -47,10 +49,20 @@ if [ -z "${RG:-}" ] || [ -z "${VM_NAME:-}" ]; then
 fi
 export SUBSCRIPTION RG VM_NAME
 
+VM_SIZE="$(az vm show --subscription "$SUBSCRIPTION" -g "$RG" -n "$VM_NAME" \
+  --query hardwareProfile.vmSize -o tsv | tr -d '\r')"
+if ! TENSOR_PARALLEL_SIZE="$(vm_size_tensor_parallel_size "$VM_SIZE")"; then
+  echo "ERROR: unsupported VM size '${VM_SIZE}' for ${VM_NAME}; expected Standard_NC40ads_H100_v5 or Standard_NC80adis_H100_v5" >&2
+  exit 2
+fi
+echo "VM size: ${VM_SIZE} (vLLM tensor parallel size ${TENSOR_PARALLEL_SIZE})"
+
 ENV_LINES=""
 if [ -f .env ]; then
   ENV_LINES="$(tr -d '\r' < .env | grep -E '^[A-Za-z_][A-Za-z0-9_]*=.+' || true)"
 fi
+ENV_LINES="$(printf '%s\n' "$ENV_LINES" | grep -v -e '^QWEN38_27B_TENSOR_PARALLEL_SIZE=' -e '^$' || true)"
+ENV_LINES="${ENV_LINES:+$ENV_LINES$'\n'}QWEN38_27B_TENSOR_PARALLEL_SIZE=${TENSOR_PARALLEL_SIZE}"
 NGROK_MODE=disabled
 if [ "$ACTION" = up ] && [ -z "${COMPOSE_FILES:-}" ]; then
   NGROK_AUTHTOKEN_VALUE="$(printf '%s\n' "$ENV_LINES" | sed -n 's/^NGROK_AUTHTOKEN=//p' | tail -n 1)"

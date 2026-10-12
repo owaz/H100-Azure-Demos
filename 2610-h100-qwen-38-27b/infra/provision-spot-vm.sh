@@ -8,7 +8,7 @@
 #   access.
 # - Spot priority with eviction policy Deallocate. Spot draws on the regional
 #   low-priority vCPU quota, not the NCadsH100v5 family quota, which is often 0
-#   in a new subscription. One NC40ads_H100_v5 needs 40 low-priority vCPUs.
+#   in a new subscription. NC40 needs 40 low-priority vCPUs; NC80 needs 80.
 # - Administration runs through `az vm run-command` (scripts/vm-run.sh), so no
 #   SSH ingress is required.
 #
@@ -23,6 +23,7 @@
 #
 #   LOCATION=southeastasia ZONE=2 infra/provision-spot-vm.sh   # reuse, or create
 #   LOCATION=southeastasia ZONE=none infra/provision-spot-vm.sh # regional VM
+#   VM_SIZE=Standard_NC80adis_H100_v5 LOCATION=... infra/provision-spot-vm.sh
 #   FORCE_NEW=1 LOCATION=... ZONE=... infra/provision-spot-vm.sh
 #   RG=... VM_NAME=... infra/provision-spot-vm.sh    # explicit names, no lookup
 #
@@ -41,7 +42,7 @@ ZONE="${ZONE:-none}"
 PREFIX="${PREFIX:-llm-h100}"
 DATE_SUFFIX="${DATE_SUFFIX:-$(date +%y%m%d)}"   # yymmdd, e.g. 261009
 FORCE_NEW="${FORCE_NEW:-0}"
-VM_SIZE="${VM_SIZE:-Standard_NC40ads_H100_v5}"
+VM_SIZE="${VM_SIZE:-}"
 IMAGE="${IMAGE:-Canonical:ubuntu-24_04-lts:server:latest}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
 OS_DISK_GB="${OS_DISK_GB:-128}"
@@ -58,9 +59,43 @@ NAT_PIP="pip-nat-${PREFIX}"
 
 # shellcheck source=../scripts/lib/find-vm.sh
 . "$(dirname "$0")/../scripts/lib/find-vm.sh"
+# shellcheck source=../scripts/lib/vm-size.sh
+. "$(dirname "$0")/../scripts/lib/vm-size.sh"
 TAGS=(project="$STACK_TAG_PROJECT" role="$STACK_TAG_ROLE" created="$(date +%F)")
 
 az() { command az "$@" --subscription "$SUBSCRIPTION"; }
+
+validate_vm_size() {
+  if ! vm_size_is_supported "$VM_SIZE"; then
+    echo "invalid VM_SIZE '${VM_SIZE}': expected Standard_NC40ads_H100_v5 or Standard_NC80adis_H100_v5" >&2
+    exit 2
+  fi
+}
+
+select_vm_size() {
+  if [ -n "$VM_SIZE" ]; then
+    validate_vm_size
+    return
+  fi
+  if [ ! -t 0 ]; then
+    echo "VM_SIZE is required in non-interactive mode: set it to Standard_NC40ads_H100_v5 or Standard_NC80adis_H100_v5" >&2
+    exit 2
+  fi
+  echo "Choose the H100 Spot VM size:" >&2
+  echo "  1) Standard_NC40ads_H100_v5  (1 x H100 NVL, 40 low-priority vCPUs)" >&2
+  echo "  2) Standard_NC80adis_H100_v5 (2 x H100 NVL, 80 low-priority vCPUs)" >&2
+  read -r -p "Selection [1-2]: " choice
+  case "$choice" in
+    1) VM_SIZE=Standard_NC40ads_H100_v5 ;;
+    2) VM_SIZE=Standard_NC80adis_H100_v5 ;;
+    *) echo "invalid selection '${choice}': expected 1 or 2" >&2; exit 2 ;;
+  esac
+}
+
+# Reject an explicit unsupported override before making any Azure changes.
+if [ -n "$VM_SIZE" ]; then
+  validate_vm_size
+fi
 
 REUSE=0
 if [ -z "${RG:-}" ] && [ -z "${VM_NAME:-}" ] && [ "$FORCE_NEW" != 1 ]; then
@@ -115,6 +150,10 @@ region_short() {
 }
 RG="${RG:-rg-${PREFIX}-${LOCATION}-${PLACEMENT}-${DATE_SUFFIX}}"
 VM_NAME="${VM_NAME:-vm-${PREFIX}-$(region_short "$LOCATION")-${PLACEMENT}-${DATE_SUFFIX}}"
+
+if [ "$REUSE" != 1 ] && ! az vm show -g "$RG" -n "$VM_NAME" -o none 2>/dev/null; then
+  select_vm_size
+fi
 
 # Regional OTLP ingestion identity from infra/telemetry-identities.sh. Each one
 # has isolationScope=Regional (usable only in its own region), so the name

@@ -1,6 +1,6 @@
-# Deploy Qwen3.8-27B on an Azure H100 Spot VM
+# Deploy Qwen3.8-27B on Azure H100 Spot VMs
 
-This repository contains an end-to-end Azure demo for serving Qwen3.8-27B on one H100 GPU. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
+This repository contains an end-to-end Azure demo for serving Qwen3.8-27B on one or two H100 GPUs. It provisions the infrastructure, deploys an OpenAI-compatible API, collects telemetry, and includes a Grafana dashboard for performance, reliability, and token economics.
 
 ## Fork information
 
@@ -14,7 +14,7 @@ The current demo lives in [`2610-h100-qwen-38-27b/`](2610-h100-qwen-38-27b/). It
 
 The demo includes:
 
-- **GPU inference**: Qwen3.8-27B FP8 on one `Standard_NC40ads_H100_v5` VM
+- **GPU inference**: Qwen3.8-27B FP8 on `Standard_NC40ads_H100_v5` (one GPU) or `Standard_NC80adis_H100_v5` (two GPUs)
 - **Model server**: vLLM with FP8 key-value cache, prefix caching, and Multi-Token Prediction (MTP)
 - **API gateway**: LiteLLM exposes an OpenAI-compatible API and records model telemetry
 - **Private host**: the VM has no public IP or Secure Shell (SSH) ingress
@@ -39,7 +39,7 @@ Client
       vLLM on 127.0.0.1:8096
          |
          v
-      Qwen3.8-27B FP8 on one H100 NVL GPU
+      Qwen3.8-27B FP8 on one or two H100 NVL GPUs
 
 LiteLLM traces -------+
 vLLM metrics ---------+
@@ -61,7 +61,7 @@ Every service binds to localhost on the VM. Azure Network Security Group rules d
 
 The demo downloads the pinned [`Qwen/Qwen3.8-27B-FP8`](https://huggingface.co/Qwen/Qwen3.8-27B-FP8) checkpoint to a persistent data disk. The container then runs without Hugging Face network access.
 
-The vLLM configuration targets the 94 GB H100 NVL:
+The vLLM configuration targets one 94 GB H100 NVL on NC40 or uses tensor parallelism across two on NC80:
 
 - Native 262K context window
 - FP8 weights and key-value cache
@@ -77,7 +77,7 @@ LiteLLM publishes the model as `local-llm`. Clients can use the OpenAI chat comp
 
 [`infra/provision-spot-vm.sh`](2610-h100-qwen-38-27b/infra/provision-spot-vm.sh) creates the compute environment. It provisions the VM, data disk, virtual network, Network Security Group, NAT gateway, and managed identities.
 
-The VM uses Azure Spot capacity by default. [`infra/spot-regions.sh`](2610-h100-qwen-38-27b/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment. You can remove the Spot flags when you need regular capacity and have the required quota.
+The VM uses Azure Spot capacity by default. For new VMs, the provisioner offers the one-GPU NC40 and two-GPU NC80 sizes; `VM_SIZE` provides the same choice for non-interactive runs. [`infra/spot-regions.sh`](2610-h100-qwen-38-27b/infra/spot-regions.sh) compares eviction rates, prices, and placement scores before deployment and accepts `SKU` to select the size to inspect. You can remove the Spot flags when you need regular capacity and have the required quota.
 
 The scripts support zonal and regional placement. Regional placement gives the Azure allocator more options when H100 capacity is scarce.
 
@@ -117,6 +117,8 @@ The collector filters routine health checks, metric scrapes, empty lines, and Do
 ## Grafana dashboard
 
 [`observability/grafana/h100-llm.json`](2610-h100-qwen-38-27b/observability/grafana/h100-llm.json) is ready to import into Grafana. [`observability/grafana/build_dashboard.py`](2610-h100-qwen-38-27b/observability/grafana/build_dashboard.py) generates the JSON source.
+
+![Grafana dashboard showing H100 model throughput, token rates, cache use, and concurrent requests](2610-h100-qwen-38-27b/observability/grafana/h100-llm-dashboard.png)
 
 The dashboard contains these sections:
 

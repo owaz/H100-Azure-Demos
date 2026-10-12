@@ -3,6 +3,7 @@
 #
 #   infra/spot-regions.sh                            # eviction rate + price, all regions
 #   infra/spot-regions.sh southeastasia uksouth ...  # also placement scores (max 8 regions)
+#   SKU=Standard_NC80adis_H100_v5 infra/spot-regions.sh southeastasia uksouth
 #
 # 1. Eviction rate and Linux Spot price per region, from the SpotResources
 #    table in Azure Resource Graph. Query it at tenant scope: scoping the
