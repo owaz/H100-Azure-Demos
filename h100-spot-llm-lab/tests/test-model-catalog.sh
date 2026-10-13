@@ -106,7 +106,7 @@ jq -e '
       any(.targets[]; .expr == "vector($max_num_seqs)"))
 ' observability/grafana/h100-llm.json >/dev/null
 
-if command -v docker >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   MODEL_VM_SIZE="$NC40" docker compose -f compose.yaml config -q
   MODEL_VM_SIZE="$NC40" \
     TELEMETRY_UAMI_CLIENT_ID=test \
@@ -163,7 +163,10 @@ RESOURCE_GROUP=rg-test \
 VM_NAME=vm-test \
 DEPLOY_MODEL=0 \
   scripts/deploy.sh sync >"${tmp_dir}/no-model-sync-output"
-deleted_paths="$(git diff --no-renames --relative --name-only -z --diff-filter=D HEAD -- . | tr '\0' '\n')"
+deleted_b64="$(
+  git diff --no-renames --relative --name-only -z --diff-filter=D HEAD -- . |
+    base64 -w0
+)"
 mv "$renamed_test_file" .env.example
 rm "$overlay_test_file"
 grep -Fq "Model: none (sync only)" "${tmp_dir}/no-model-sync-output"
@@ -183,7 +186,7 @@ archive_url="https://github.com/example/fork/archive/$(git rev-parse HEAD).tar.g
 grep -Fq "$(printf '%s' "$archive_url" | base64 -w0)" "${tmp_dir}/remote-script"
 grep -Fq "base64 -d < '/root/.cache/llm-self-hosting/deploy-overlay.b64'" \
   "${tmp_dir}/remote-script"
-printf '%s\n' "$deleted_paths" | grep -Fxq '.env.example'
+grep -Fq "printf '%s' '$deleted_b64' | base64 -d" "${tmp_dir}/remote-script"
 deployment_sources="$(git ls-files --cached --others --exclude-standard -- tests/runtime/)"
 printf '%s\n' "$deployment_sources" |
   grep -Fxq 'tests/runtime/smoke-test.sh'

@@ -117,6 +117,20 @@ class RuntimeEvalTests(unittest.TestCase):
                 },
             })
 
+    def test_rejects_excess_total_tokens(self):
+        with self.assertRaisesRegex(runtime_eval.EvalFailure, "inconsistent"):
+            runtime_eval.validate_chat_response({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "ok"},
+                }],
+                "usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 100,
+                },
+            })
+
     def test_parses_stream(self):
         chunks = [
             {"choices": [{"delta": {"content": "STREAM_"}, "finish_reason": None}]},
@@ -131,6 +145,25 @@ class RuntimeEvalTests(unittest.TestCase):
     def test_rejects_stream_without_done(self):
         lines = [b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n']
         with self.assertRaisesRegex(runtime_eval.EvalFailure, r"\[DONE\]"):
+            runtime_eval.parse_stream(lines)
+
+    def test_rejects_duplicate_done_markers(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n',
+            b"data: [DONE]\n",
+            b": keep-alive\n",
+            b"data: [DONE]\n",
+        ]
+        with self.assertRaisesRegex(runtime_eval.EvalFailure, "duplicate"):
+            runtime_eval.parse_stream(lines)
+
+    def test_rejects_data_after_done(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n',
+            b"data: [DONE]\n",
+            b'data: {"choices":[{"delta":{"content":"late"},"finish_reason":null}]}\n',
+        ]
+        with self.assertRaisesRegex(runtime_eval.EvalFailure, r"after \[DONE\]"):
             runtime_eval.parse_stream(lines)
 
     def test_long_context_prompt_preserves_marker(self):
