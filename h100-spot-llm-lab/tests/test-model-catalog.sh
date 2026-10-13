@@ -52,8 +52,13 @@ MODEL_ID=gpt-oss-120b \
 MODEL_COMMAND_ONLY=1 \
   python3 scripts/download_model.py |
   jq -e '
+    . as $command |
     index("openai/gpt-oss-120b") != null and
     index("model-*.safetensors") != null and
+    $command[index("*.json") - 1] == "--include" and
+    $command[index("*.jinja") - 1] == "--include" and
+    $command[index("model-*.safetensors") - 1] == "--include" and
+    ([range(0; length) as $i | select(.[$i] == "--include")] | length) == 5 and
     index("original/*") == null and
     index("metal/*") == null
   ' >/dev/null
@@ -89,6 +94,8 @@ for file in scripts/*.sh scripts/lib/*.sh infra/*.sh tests/*.sh; do
   bash -n "$file"
 done
 python3 -m py_compile scripts/model_profile.py scripts/download_model.py scripts/serve_model.py scripts/realtext.py
+grep -A2 -F 'NVIDIA driver ${NVIDIA_DRIVER_MIN_BRANCH}+ is installed but not loaded' \
+  scripts/bootstrap-host.sh | grep -Fq 'exit 1'
 python3 observability/grafana/build_dashboard.py >/dev/null
 jq -e '
   any(.templating.list[]; .name == "max_num_seqs" and .current.value == "32") and

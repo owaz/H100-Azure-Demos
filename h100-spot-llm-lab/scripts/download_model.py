@@ -18,8 +18,8 @@ def build_command(model: dict) -> list:
         "--local-dir",
         str(destination),
     ]
-    command.append("--include")
-    command.extend(model["download_patterns"])
+    for pattern in model["download_patterns"]:
+        command.extend(["--include", pattern])
     return command
 
 
