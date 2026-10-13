@@ -163,22 +163,19 @@ Grafana is optional. Azure continues to ingest telemetry when you do not deploy 
 
 ## Deploy the demo
 
-Install the Azure Command-Line Interface (CLI) and `jq`, then authenticate with `az login`. You also need 40 low-priority virtual CPUs of Spot quota in your selected region.
+Install the Azure Command-Line Interface (CLI), Python 3, and `jq`, then authenticate with `az login`. You also need 40 low-priority virtual CPUs of Spot quota in your selected region.
 
-Run these commands from the demo directory:
+Run the interactive launcher:
 
 ```bash
 cd h100-spot-llm-lab
 cp .env.example .env
-export RESOURCE_GROUP=rg-llm-h100-lab
-LOCATION=southeastasia infra/provision-monitoring.sh
-LOCATION=southeastasia infra/provision-spot-vm.sh
-scripts/vm-run.sh scripts/bootstrap-host.sh
-scripts/deploy.sh up
-scripts/vm-run.sh scripts/smoke-test.sh
+scripts/launch.sh
 ```
 
-The first deployment downloads the model and can take about 20 minutes. Set both `NGROK_AUTHTOKEN` and `NGROK_URL` in `.env` to enable ngrok. Leave both values empty to keep the gateway private.
+The launcher guides you through the VM size, Azure region, resource group, model, monitoring, and ngrok options. It provisions or reuses the VM, deploys the selected model, waits for the services to become healthy, and runs the smoke test. The first deployment downloads the model and can take about 20 minutes.
+
+To enable ngrok, set both `NGROK_AUTHTOKEN` and `NGROK_URL` in `.env` before running the launcher. Leave both values empty to keep the gateway private.
 
 Read the [complete deployment guide](h100-spot-llm-lab/README.md) for region selection, monitoring options, dashboard import, troubleshooting, and cleanup.
 
@@ -188,6 +185,7 @@ The repository includes scripts for common operations:
 
 | Script | Purpose |
 |---|---|
+| `scripts/launch.sh` | Interactively provision or reuse a VM and deploy the complete demo |
 | `scripts/vm-power.sh` | Start, stop, or inspect the VM |
 | `scripts/vm-run.sh` | Run a command or local script through Azure VM Run Command |
 | `scripts/vm-status.sh` | Inspect containers, downloads, and GPU memory |
