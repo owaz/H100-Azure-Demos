@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real-text decode throughput against vLLM directly (stdlib only), on the VM.
 
-  python3 scripts/realtext.py 1 32      # one run per concurrency level
+  python3 tests/runtime/realtext.py 1 32      # one run per concurrency level
 
 Each request is a natural-language prompt with thinking off and exactly 512
 output tokens (ignore_eos), so speculative decoding (MTP) sees real text,
@@ -14,12 +14,13 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from model_profile import load_catalog, resolve_profile
 
 URL = "http://127.0.0.1:8096/v1/chat/completions"
 OUT = 512
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ENV = {}
 for line in (ROOT / ".env").read_text(encoding="utf-8").splitlines():
     if "=" in line and not line.startswith("#"):

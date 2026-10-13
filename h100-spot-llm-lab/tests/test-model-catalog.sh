@@ -29,7 +29,7 @@ if python3 scripts/model_profile.py resolve qwen2.5-72b-instruct "$NC40" >/dev/n
 fi
 
 bench_plan="$(
-  MODEL_ID=qwen2.5-72b-instruct VM_SIZE="$NC80" BENCH_PLAN_ONLY=1 scripts/bench.sh
+  MODEL_ID=qwen2.5-72b-instruct VM_SIZE="$NC80" BENCH_PLAN_ONLY=1 tests/runtime/bench.sh
 )"
 bench_context="$(printf '%s' "$bench_plan" | sed -n 's/.*max_model_len=\([0-9]*\).*/\1/p')"
 bench_total="$(printf '%s' "$bench_plan" | sed -n 's/.*total=\([0-9]*\).*/\1/p')"
@@ -90,10 +90,13 @@ if python3 scripts/model_profile.py --catalog "$tmp_catalog" validate >/dev/null
   exit 1
 fi
 
-for file in scripts/*.sh scripts/lib/*.sh infra/*.sh tests/*.sh; do
+for file in scripts/*.sh scripts/lib/*.sh infra/*.sh tests/*.sh tests/runtime/*.sh; do
   bash -n "$file"
 done
-python3 -m py_compile scripts/model_profile.py scripts/download_model.py scripts/serve_model.py scripts/realtext.py
+python3 -m py_compile \
+  scripts/model_profile.py scripts/download_model.py scripts/serve_model.py \
+  tests/runtime/eval-test.py tests/runtime/realtext.py tests/test-runtime-eval.py
+python3 tests/test-runtime-eval.py
 grep -A2 -F 'NVIDIA driver ${NVIDIA_DRIVER_MIN_BRANCH}+ is installed but not loaded' \
   scripts/bootstrap-host.sh | grep -Fq 'exit 1'
 python3 observability/grafana/build_dashboard.py >/dev/null
@@ -160,6 +163,7 @@ RESOURCE_GROUP=rg-test \
 VM_NAME=vm-test \
 DEPLOY_MODEL=0 \
   scripts/deploy.sh sync >"${tmp_dir}/no-model-sync-output"
+deleted_paths="$(git diff --no-renames --relative --name-only -z --diff-filter=D HEAD -- . | tr '\0' '\n')"
 mv "$renamed_test_file" .env.example
 rm "$overlay_test_file"
 grep -Fq "Model: none (sync only)" "${tmp_dir}/no-model-sync-output"
@@ -179,7 +183,19 @@ archive_url="https://github.com/example/fork/archive/$(git rev-parse HEAD).tar.g
 grep -Fq "$(printf '%s' "$archive_url" | base64 -w0)" "${tmp_dir}/remote-script"
 grep -Fq "base64 -d < '/root/.cache/llm-self-hosting/deploy-overlay.b64'" \
   "${tmp_dir}/remote-script"
-grep -Fq "$(printf '.env.example\0' | base64 -w0)" "${tmp_dir}/remote-script"
+printf '%s\n' "$deleted_paths" | grep -Fxq '.env.example'
+deployment_sources="$(git ls-files --cached --others --exclude-standard -- tests/runtime/)"
+printf '%s\n' "$deployment_sources" |
+  grep -Fxq 'tests/runtime/smoke-test.sh'
+printf '%s\n' "$deployment_sources" |
+  grep -Fxq 'tests/runtime/bench.sh'
+printf '%s\n' "$deployment_sources" |
+  grep -Fxq 'tests/runtime/eval-test.py'
+printf '%s\n' "$deployment_sources" |
+  grep -Fxq 'tests/runtime/realtext.py'
+[ ! -e scripts/smoke-test.sh ]
+[ ! -e scripts/bench.sh ]
+[ ! -e scripts/realtext.py ]
 [ "$(wc -l < "${tmp_dir}/remote-script-sizes" | tr -d ' ')" -gt 2 ]
 [ "$(sort -nr "${tmp_dir}/remote-script-sizes" | head -n 1 | tr -d ' ')" -lt 140000 ]
 
