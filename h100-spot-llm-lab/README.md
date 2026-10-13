@@ -223,10 +223,10 @@ Run the full local regression suite from the lab directory:
 bash tests/test-model-catalog.sh
 ```
 
-The suite requires Bash, Python 3, and `jq`. If Docker is installed, it also
-validates the core and observability Compose configurations; otherwise those
-optional checks are skipped. The tests mock Azure CLI calls, so they do not
-create, update, or delete Azure resources.
+The suite requires Bash, Python 3, and `jq`. If Docker and the Docker Compose
+plugin are installed, it also validates the core and observability Compose
+configurations; otherwise those optional checks are skipped. The tests mock
+Azure CLI calls, so they do not create, update, or delete Azure resources.
 
 The goal is to catch configuration and scripting regressions before deploying
 the lab. The suite validates the model catalog and VM compatibility rules,
@@ -252,11 +252,24 @@ the local regression suite:
   throughput at the requested concurrency levels, complementing the
   synthetic-token benchmark.
 
+Use [`scripts/vm-run.sh`](scripts/vm-run.sh) to access Azure VM Run Command
+without SSH. Set the subscription and resource group that contain the lab VM.
+Set `VM_NAME` to target a specific VM; if it is omitted, the wrapper selects
+the newest VM tagged for this stack in the resource group. For example:
+
+```bash
+export SUBSCRIPTION=<azure-subscription-id>
+export RESOURCE_GROUP=rg-llm-h100-lab
+export VM_NAME=vm-h100-eus-01
+
+scripts/vm-run.sh -c 'cd /opt/llm-self-hosting && docker compose ps'
+```
+
 Run them through the Azure Run Command wrapper once the stack is healthy:
 
 ```bash
 scripts/vm-run.sh tests/runtime/smoke-test.sh
-scripts/vm-run.sh tests/runtime/eval-test.py
+scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/tests/runtime/eval-test.py'
 scripts/vm-run.sh tests/runtime/bench.sh
 scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/tests/runtime/realtext.py 1 32'
 ```
