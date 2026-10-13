@@ -289,7 +289,7 @@ if [ "$enable_ngrok" = 1 ]; then
   '
 fi
 scripts/vm-run.sh scripts/vm-status.sh
-scripts/vm-run.sh scripts/smoke-test.sh
+scripts/vm-run.sh tests/runtime/smoke-test.sh
 deployment_in_progress=0
 
 echo

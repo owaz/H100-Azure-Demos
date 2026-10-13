@@ -1,5 +1,5 @@
 #!/bin/bash
-# Serving throughput benchmark, run on the VM:  scripts/vm-run.sh scripts/bench.sh
+# Serving throughput benchmark, run on the VM:  scripts/vm-run.sh tests/runtime/bench.sh
 # Runs `vllm bench serve` inside the model container against vLLM directly
 # (not the gateway), so the numbers measure the engine, not LiteLLM.
 #   1. random prompts (IN tokens in, OUT tokens out, ignore_eos) at each
@@ -9,11 +9,11 @@
 # Prints one compact line per run (run-command returns only the last ~4 KB);
 # full JSON results go to /opt/llm-self-hosting/results/bench-<timestamp>/.
 # Random token prompts understate MTP acceptance; compare the single-stream
-# decode figure from smoke-test.sh for real text.
+# decode figure from tests/runtime/smoke-test.sh for real text.
 #
-# Overrides, e.g.:  scripts/vm-run.sh -c 'CONCURRENCY="1 16" bash /opt/llm-self-hosting/scripts/bench.sh'
+# Overrides, e.g.:  scripts/vm-run.sh -c 'CONCURRENCY="1 16" bash /opt/llm-self-hosting/tests/runtime/bench.sh'
 if [ "${BENCH_PLAN_ONLY:-0}" = 1 ]; then
-  cd "$(dirname "$0")/.." || exit 1
+  cd "$(dirname "$0")/../.." || exit 1
 else
   cd /opt/llm-self-hosting || exit 1
 fi

@@ -120,7 +120,8 @@ LOCATION=southeastasia infra/provision-spot-vm.sh           # choose NC40 or NC8
 scripts/vm-run.sh scripts/bootstrap-host.sh   # data disk, NVIDIA driver, Docker, container toolkit (~4 min)
 MODEL_ID="$MODEL_ID" scripts/deploy.sh up      # core-only unless monitoring was provisioned
 scripts/vm-run.sh scripts/vm-status.sh        # containers, model download, GPU memory
-scripts/vm-run.sh scripts/smoke-test.sh       # health, chat, declared capabilities, decode speed
+scripts/vm-run.sh tests/runtime/smoke-test.sh # health, chat, declared capabilities, decode speed
+scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/tests/runtime/eval-test.py' # correctness, streaming, tools
 ```
 
 `vm-run.sh` propagates the guest script's exit status instead of Azure Run
@@ -196,8 +197,8 @@ Day to day:
 export RESOURCE_GROUP=rg-llm-h100-lab
 scripts/vm-power.sh stop|start|status         # deallocate / start (the stack restarts on boot)
 scripts/vm-run.sh -c 'docker logs --tail 50 llm-model'
-scripts/vm-run.sh scripts/bench.sh            # vllm bench serve at concurrency 1/4/16/32 + shared prefix
-scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/scripts/realtext.py 1 32'   # real-text decode speed
+scripts/vm-run.sh tests/runtime/bench.sh      # vllm bench serve at concurrency 1/4/16/32 + shared prefix
+scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/tests/runtime/realtext.py 1 32' # real-text decode speed
 az group delete -n "$RESOURCE_GROUP" --yes    # remove the complete lab
 ```
 
@@ -213,6 +214,79 @@ By default it starts the core and observability Compose files, adding
 workstation `.env`. Removing both values disables ngrok on the next deployment;
 a partial configuration fails before syncing. Set
 `COMPOSE_FILES` to override this automatic selection.
+
+## Testing
+
+Run the full local regression suite from the lab directory:
+
+```bash
+bash tests/test-model-catalog.sh
+```
+
+The suite requires Bash, Python 3, and `jq`. If Docker is installed, it also
+validates the core and observability Compose configurations; otherwise those
+optional checks are skipped. The tests mock Azure CLI calls, so they do not
+create, update, or delete Azure resources.
+
+The goal is to catch configuration and scripting regressions before deploying
+the lab. The suite validates the model catalog and VM compatibility rules,
+generated download and serving commands, benchmark limits, shell and Python
+syntax, dashboard generation, deployment overlays, resource-group handling,
+collision-free VM naming, and propagation of remote script exit codes.
+
+The deployed-model checks are kept under [`tests/runtime/`](tests/runtime/).
+They run against the VM after deployment and are intentionally separate from
+the local regression suite:
+
+- [`smoke-test.sh`](tests/runtime/smoke-test.sh) checks vLLM and gateway
+  health, basic chat, catalog-declared reasoning and tool capabilities,
+  single-stream decode output, GPU facts, and optional telemetry health.
+- [`eval-test.py`](tests/runtime/eval-test.py) makes hard pass/fail assertions
+  for instruction following, response metadata, structured JSON, streaming,
+  concurrent request isolation, reasoning answers, and tool-call arguments.
+  An optional long-context recall check exercises a larger prompt.
+- [`bench.sh`](tests/runtime/bench.sh) measures engine throughput, time to
+  first token (TTFT), inter-token latency (ITL), and shared-prefix behavior
+  across concurrency levels. It writes detailed JSON results on the VM.
+- [`realtext.py`](tests/runtime/realtext.py) measures real-text decode
+  throughput at the requested concurrency levels, complementing the
+  synthetic-token benchmark.
+
+Run them through the Azure Run Command wrapper once the stack is healthy:
+
+```bash
+scripts/vm-run.sh tests/runtime/smoke-test.sh
+scripts/vm-run.sh tests/runtime/eval-test.py
+scripts/vm-run.sh tests/runtime/bench.sh
+scripts/vm-run.sh -c 'python3 /opt/llm-self-hosting/tests/runtime/realtext.py 1 32'
+```
+
+To include long-context recall, enable it explicitly. The target defaults to
+about 32K tokens and is capped at 75% of the selected model profile's context
+limit; set `EVAL_LONG_CONTEXT_TOKENS` to choose a different target:
+
+```bash
+scripts/vm-run.sh -c \
+  'EVAL_LONG_CONTEXT=1 python3 /opt/llm-self-hosting/tests/runtime/eval-test.py'
+```
+
+Their goal is to confirm that the selected model actually serves requests,
+behaves correctly under the declared capabilities, preserves the
+OpenAI-compatible response contract, and provides repeatable performance and
+observability measurements. These checks require a provisioned VM, a deployed
+model, and the runtime dependencies installed by the bootstrap; only the
+evaluator's mocked protocol tests run in the local Azure-free regression suite.
+
+For a targeted check, run either supporting test directly:
+
+```bash
+bash tests/test-resource-group.sh
+bash tests/test-vm-run.sh
+```
+
+A successful full run ends with `model catalog tests: PASS`; the targeted
+scripts end with their corresponding `PASS` message and return a nonzero exit
+code if an assertion fails.
 
 ## Model catalog and compatibility
 

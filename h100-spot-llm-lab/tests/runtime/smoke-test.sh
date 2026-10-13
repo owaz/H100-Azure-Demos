@@ -1,6 +1,6 @@
 #!/bin/bash
 # Capability-aware smoke test, run on the VM:
-#   scripts/vm-run.sh scripts/smoke-test.sh
+#   scripts/vm-run.sh tests/runtime/smoke-test.sh
 set -u
 cd /opt/llm-self-hosting || exit 1
 
@@ -41,13 +41,24 @@ check "vLLM /health" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:
 check "gateway /v1/models" "$(curl -s -o /dev/null -w '%{http_code}' "$GW/v1/models")" 200
 check "gateway /metrics/" "$(curl -s -o /dev/null -w '%{http_code}' "$GW/metrics/")" 200
 
-chat_payload="$(jq -cn --argjson kwargs "$CHAT_KWARGS" '{
-  model:"local-llm",
-  max_tokens:64,
-  temperature:0,
-  messages:[{role:"user",content:"Reply with exactly: PONG"}],
-  chat_template_kwargs:$kwargs
-}')"
+if [ "$HAS_REASONING" = true ]; then
+  chat_payload="$(jq -cn --argjson kwargs "$CHAT_KWARGS" '{
+    model:"local-llm",
+    max_tokens:64,
+    temperature:0,
+    reasoning_effort:"low",
+    messages:[{role:"user",content:"Reply with exactly: PONG"}],
+    chat_template_kwargs:$kwargs
+  }')"
+else
+  chat_payload="$(jq -cn --argjson kwargs "$CHAT_KWARGS" '{
+    model:"local-llm",
+    max_tokens:64,
+    temperature:0,
+    messages:[{role:"user",content:"Reply with exactly: PONG"}],
+    chat_template_kwargs:$kwargs
+  }')"
+fi
 chat="$(post_chat "$chat_payload")"
 if [ "$(printf '%s' "$chat" | jq -r '.error // empty')" ]; then
   echo "FAIL basic chat: $(printf '%s' "$chat" | jq -c '.error' | cut -c1-300)"
