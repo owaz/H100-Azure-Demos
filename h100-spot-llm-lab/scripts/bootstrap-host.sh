@@ -10,7 +10,8 @@ set -euo pipefail
 exec > >(tee -a /var/log/llm-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
 
-NVIDIA_DRIVER_BRANCH="${NVIDIA_DRIVER_BRANCH:-595}"
+NVIDIA_DRIVER_BRANCH="${NVIDIA_DRIVER_BRANCH:-615}"
+NVIDIA_DRIVER_MIN_BRANCH="${NVIDIA_DRIVER_MIN_BRANCH:-610}"
 DATA_DEV="/dev/disk/azure/scsi1/lun0"
 DATA_MNT="/data"
 
@@ -39,10 +40,23 @@ apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg jq >/dev/null
 
 echo "==> NVIDIA driver ${NVIDIA_DRIVER_BRANCH}-server-open"
-if ! command -v nvidia-smi >/dev/null || ! nvidia-smi >/dev/null 2>&1; then
+current_driver_branch="$(
+  nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null |
+    head -n 1 | cut -d. -f1 || true
+)"
+if ! [[ "$current_driver_branch" =~ ^[0-9]+$ ]] ||
+    [ "$current_driver_branch" -lt "$NVIDIA_DRIVER_MIN_BRANCH" ]; then
   apt-get install -y -qq "nvidia-driver-${NVIDIA_DRIVER_BRANCH}-server-open" \
     "nvidia-utils-${NVIDIA_DRIVER_BRANCH}-server" >/dev/null
   modprobe nvidia || echo "modprobe failed; a reboot is required"
+fi
+loaded_driver_branch="$(
+  nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null |
+    head -n 1 | cut -d. -f1 || true
+)"
+if ! [[ "$loaded_driver_branch" =~ ^[0-9]+$ ]] ||
+    [ "$loaded_driver_branch" -lt "$NVIDIA_DRIVER_MIN_BRANCH" ]; then
+  echo "WARNING: NVIDIA driver ${NVIDIA_DRIVER_MIN_BRANCH}+ is installed but not loaded; reboot before starting vLLM"
 fi
 systemctl enable --now nvidia-persistenced 2>/dev/null || true
 

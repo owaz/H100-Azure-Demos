@@ -43,6 +43,8 @@ the `--priority Spot` flags in `infra/provision-spot-vm.sh`.
 
 - Azure CLI, Python 3, and `jq`, logged in (`az login`), in Bash (Linux, macOS, WSL or Git Bash on Windows).
 - Low-priority (Spot) vCPU quota in the region you pick: 40 vCPUs for NC40 or 80 for NC80.
+- The bootstrap installs NVIDIA server driver branch 615, satisfying the 610+ host-driver requirement of
+  the pinned NVIDIA vLLM 26.07 image.
 - Optional: an [ngrok](https://ngrok.com) account with an authtoken and a reserved domain for a public URL.
   The deployment enables ngrok only when both `NGROK_AUTHTOKEN` and `NGROK_URL` are set in the
   workstation `.env`.

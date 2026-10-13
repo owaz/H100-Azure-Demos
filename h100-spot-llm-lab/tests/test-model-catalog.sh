@@ -52,8 +52,13 @@ MODEL_ID=gpt-oss-120b \
 MODEL_COMMAND_ONLY=1 \
   python3 scripts/download_model.py |
   jq -e '
+    . as $command |
     index("openai/gpt-oss-120b") != null and
     index("model-*.safetensors") != null and
+    $command[index("*.json") - 1] == "--include" and
+    $command[index("*.jinja") - 1] == "--include" and
+    $command[index("model-*.safetensors") - 1] == "--include" and
+    ([range(0; length) as $i | select(.[$i] == "--include")] | length) == 5 and
     index("original/*") == null and
     index("metal/*") == null
   ' >/dev/null
