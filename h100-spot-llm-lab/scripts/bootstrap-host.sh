@@ -56,7 +56,8 @@ loaded_driver_branch="$(
 )"
 if ! [[ "$loaded_driver_branch" =~ ^[0-9]+$ ]] ||
     [ "$loaded_driver_branch" -lt "$NVIDIA_DRIVER_MIN_BRANCH" ]; then
-  echo "WARNING: NVIDIA driver ${NVIDIA_DRIVER_MIN_BRANCH}+ is installed but not loaded; reboot before starting vLLM"
+  echo "ERROR: NVIDIA driver ${NVIDIA_DRIVER_MIN_BRANCH}+ is installed but not loaded; reboot the VM and rerun the launcher" >&2
+  exit 1
 fi
 systemctl enable --now nvidia-persistenced 2>/dev/null || true
 
