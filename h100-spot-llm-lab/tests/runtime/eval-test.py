@@ -53,7 +53,7 @@ def validate_chat_response(response, require_content=True):
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         if not isinstance(usage.get(key), int) or usage[key] < 0:
             raise EvalFailure(f"usage.{key} must be a non-negative integer")
-    if usage["total_tokens"] < usage["prompt_tokens"] + usage["completion_tokens"]:
+    if usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
         raise EvalFailure("usage.total_tokens is inconsistent")
     return choice
 
@@ -67,6 +67,10 @@ def parse_stream(lines):
         line = raw_line.decode("utf-8").strip()
         if not line or line.startswith(":"):
             continue
+        if saw_done:
+            if line == "data: [DONE]":
+                raise EvalFailure("stream contained duplicate [DONE] markers")
+            raise EvalFailure("stream contained data after [DONE]")
         if not line.startswith("data:"):
             raise EvalFailure(f"unexpected streaming line: {line[:120]}")
         data = line[5:].strip()
