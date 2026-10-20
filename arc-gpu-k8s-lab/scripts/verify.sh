@@ -16,7 +16,7 @@ diagnostics() {
   exit "$rc"
 }
 trap diagnostics EXIT
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
+bash "$(dirname "${BASH_SOURCE[0]}")/wait-for-node.sh"
 deadline=$((SECONDS + 1800))
 while :; do
   nodes="$(kubectl get nodes -o json)"

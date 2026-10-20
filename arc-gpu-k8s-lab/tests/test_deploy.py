@@ -48,7 +48,26 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
-if args[:2] == ["get", "nodes"] and "-o" in args and args[args.index("-o") + 1] == "json":
+state = os.environ.get("MOCK_NODE_STATE")
+if args[:2] == ["get", "nodes"] and "-o" in args and args[args.index("-o") + 1] == "name":
+    polls = int(open(state).read()) if state and os.path.exists(state) else 0
+    if state:
+        with open(state, "w") as f:
+            f.write(str(polls + 1))
+    if polls >= int(os.environ.get("MOCK_EMPTY_NODE_POLLS", "0")):
+        print("node/vm-arc-gpu-h100")
+    elif os.environ.get("MOCK_API_UNAVAILABLE") == "1":
+        print("Unable to connect to the server: connection refused", file=sys.stderr)
+        sys.exit(1)
+elif args[:1] == ["wait"] and "nodes" in args:
+    polls = int(open(state).read()) if state and os.path.exists(state) else 0
+    if polls < int(os.environ.get("MOCK_EMPTY_NODE_POLLS", "0")):
+        print("error: no matching resources found", file=sys.stderr)
+        sys.exit(1)
+    if os.environ.get("MOCK_NODE_NOT_READY") == "1":
+        print("error: timed out waiting for the condition on nodes", file=sys.stderr)
+        sys.exit(1)
+elif args[:2] == ["get", "nodes"] and "-o" in args and args[args.index("-o") + 1] == "json":
     print(json.dumps({"items": [{"status": {"allocatable": {"nvidia.com/gpu": os.environ.get("EXPECTED_GPUS", "1")}}}]}))
 elif args[:1] == ["wait"] and "pod/gpu-smoke" in args and os.environ.get("MOCK_POD_FAIL") == "1":
     print("Pod never succeeded", file=sys.stderr)
@@ -84,6 +103,52 @@ class LabTests(unittest.TestCase):
             "SUBSCRIPTION": "test-subscription",
         }
 
+    def run_bootstrap_readiness(self, **env):
+        script = (LAB / "scripts/bootstrap.sh").read_text()
+        readiness = script.split('INSTALL_K3S_VERSION="$K3S_VERSION" sh "$work/k3s-install.sh"\n', 1)[1]
+        readiness = readiness.split('\necho "==> Installing checksum-verified Helm"', 1)[0]
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", readiness],
+            env={**self.env, "LAB_DIR": str(LAB), **env},
+            text=True, capture_output=True, timeout=20,
+        )
+
+    def test_bootstrap_waits_for_node_registration_before_readiness(self):
+        result = self.run_bootstrap_readiness(
+            MOCK_NODE_STATE=str(self.root / "node-polls"),
+            MOCK_EMPTY_NODE_POLLS="2",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no matching resources found", result.stderr)
+        calls = self.calls()
+        ready = next(i for i, c in enumerate(calls) if c[:1] == ["wait"])
+        self.assertEqual(sum(c[:2] == ["get", "nodes"] for c in calls[:ready]), 3)
+
+    def test_bootstrap_retries_api_startup_errors(self):
+        result = self.run_bootstrap_readiness(
+            MOCK_NODE_STATE=str(self.root / "node-polls"),
+            MOCK_EMPTY_NODE_POLLS="1",
+            MOCK_API_UNAVAILABLE="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("connection refused", result.stderr)
+
+    def test_registered_but_unready_node_still_fails_bootstrap(self):
+        result = self.run_bootstrap_readiness(MOCK_NODE_NOT_READY="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timed out waiting", result.stderr)
+        self.assertFalse(any(c[:2] == ["get", "runtimeclass"] for c in self.calls()))
+
+    def test_node_registration_timeout_fails_explicitly(self):
+        result = subprocess.run(
+            ["bash", str(LAB / "scripts/wait-for-node.sh"), "0"],
+            env={**self.env, "MOCK_EMPTY_NODE_POLLS": "100"},
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No Kubernetes node registered within 0s", result.stderr)
+        self.assertFalse(any(c[:1] == ["wait"] for c in self.calls()))
+
     def run_deploy(self, action="up", **env):
         return subprocess.run(
             ["bash", str(LAB / "deploy.sh"), action],
@@ -115,7 +180,14 @@ class LabTests(unittest.TestCase):
         encoded = re.search(r"printf '%s' '([^']+)' \| base64", script).group(1)
         with tarfile.open(fileobj=io.BytesIO(base64.b64decode(encoded))) as archive:
             self.assertIn("scripts/bootstrap.sh", archive.getnames())
+            self.assertIn("scripts/wait-for-node.sh", archive.getnames())
             self.assertIn("manifests/gpu-smoke.yaml", archive.getnames())
+            for member in archive.getmembers():
+                self.assertFalse(Path(member.name).name.startswith("._"))
+                self.assertFalse(any(
+                    key.startswith(("LIBARCHIVE.xattr.", "SCHILY.xattr."))
+                    for key in member.pax_headers
+                ))
         self.assertIn("K3S_VERSION=v1.35.9+k3s1", script)
         self.assertIn("EXPECTED_GPUS=1", script)
         self.assertIn('exit "$rc"', script)
