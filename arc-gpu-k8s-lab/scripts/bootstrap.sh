@@ -81,7 +81,7 @@ EOF
 work="$(mktemp -d)"
 curl -fsSL https://get.k3s.io -o "$work/k3s-install.sh"
 INSTALL_K3S_VERSION="$K3S_VERSION" sh "$work/k3s-install.sh"
-kubectl wait --for=condition=Ready nodes --all --timeout=300s
+bash "$LAB_DIR/scripts/wait-for-node.sh"
 kubectl get runtimeclass nvidia
 
 echo "==> Installing checksum-verified Helm"

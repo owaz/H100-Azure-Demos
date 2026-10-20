@@ -23,6 +23,7 @@ This folder provisions a **new**, private Azure H100 Spot VM with single-node K3
 | [`deploy.sh`](deploy.sh) | New VM/network provisioning, ownership guards, payload upload, guest result checking |
 | [`scripts/bootstrap.sh`](scripts/bootstrap.sh) | Host prerequisites, K3s, NVIDIA runtime, Helm, GPU Operator |
 | [`scripts/verify.sh`](scripts/verify.sh) | Exact GPU count, ready Operator policy, CUDA workload completion |
+| [`scripts/wait-for-node.sh`](scripts/wait-for-node.sh) | Bounded wait for node registration, then readiness, during K3s startup |
 | [`manifests/gpu-operator-values.yaml`](manifests/gpu-operator-values.yaml) | Operator ownership and lab-specific settings |
 | [`manifests/gpu-smoke.yaml`](manifests/gpu-smoke.yaml) | GPU-limited CUDA vector-add workload |
 | [`tests/test_deploy.py`](tests/test_deploy.py) | Offline Azure CLI and Kubernetes orchestration tests |
@@ -76,6 +77,8 @@ The deployment:
 6. Runs a GPU-limited CUDA vector-add pod and requires it to reach `Succeeded`. Azure extension success without a guest completion marker is treated as failure.
 
 Allow roughly 20-40 minutes for initial image downloads and driver compilation, potentially longer on a cold host. Errors leave resources intact for inspection; there is no automatic deletion or fallback to another region, VM, or regular-priced capacity. Fix the reported cause and rerun `up` against the same owned VM. A second VM is not silently created.
+
+K3s service startup can finish before its node registers with the API. Bootstrap and verification allow up to five minutes for registration and readiness, retrying temporary API startup errors. If a previous deployment stopped with `error: no matching resources found` just after K3s started, rerun `up` using the updated scripts and the same resource group, location, VM name, and size. Do not delete the VM just for this startup race. Uploaded archives omit macOS extended attributes to avoid Linux extraction warnings.
 
 Only the exact named, lab-tagged VM can be reused. The script never discovers the existing LLM VM, calls its provisioner, or copies its application files. Existing Kubernetes or Docker/LLM installations on an unowned guest are rejected by bootstrap.
 

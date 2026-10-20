@@ -133,7 +133,7 @@ esac
 work="$(mktemp -d)"
 cleanup() { rm -f "$work/request.sh" "$work/result.json"; rmdir "$work"; }
 trap cleanup EXIT
-payload="$(tar -czf - -C "$LAB_DIR" scripts manifests | base64 | tr -d '\r\n')"
+payload="$(COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C "$LAB_DIR" scripts manifests | base64 | tr -d '\r\n')"
 {
   printf '#!/bin/sh\nbash <<'\''ARC_GPU_GUEST'\''\nset -euo pipefail\n'
   printf 'trap '\''rc=$?; printf "\\nARC_GPU_EXIT=%%s\\n" "$rc"; exit "$rc"'\'' EXIT\n'
